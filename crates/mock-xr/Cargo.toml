@@ -3,5 +3,8 @@ name = "mock-xr"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "mock_xr"
+
 [dependencies]
 xrt-core = { path = "../core" }
