@@ -1,0 +1,7 @@
+[package]
+name = "mock-xr"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+xrt-core = { path = "../core" }
