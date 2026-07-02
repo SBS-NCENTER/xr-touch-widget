@@ -119,7 +119,7 @@ ui/dist
 [package]
 name = "xrt-core"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
@@ -143,7 +143,7 @@ mock-xr는 Task 4에서 만들지만 workspace members에 이미 있으므로, �
 [package]
 name = "mock-xr"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
 xrt-core = { path = "../core" }
@@ -868,7 +868,7 @@ fn full_loop_trigger_ping_pong_and_heartbeat() {
 [package]
 name = "mock-xr"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [lib]
 name = "mock_xr"
@@ -1200,7 +1200,7 @@ workspace root `Cargo.toml`의 members를 `["crates/core", "crates/mock-xr", "ap
 [package]
 name = "xrt-app"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
