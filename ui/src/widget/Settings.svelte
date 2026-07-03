@@ -127,6 +127,16 @@
    *  a later [뒤로가기] in this same session restores the applied state. */
   async function apply() {
     const snapshot = $state.snapshot(draft);
+    // Defense-in-depth (C3): a button with a blank/whitespace-only graphic_id
+    // triggers nothing on-air. Block the apply and flash the existing error
+    // affordance so the operator notices the missing graphic_id before it goes
+    // live. Duplicates are crash-safe (the palette keys its {#each} by index)
+    // and may be intentional aliasing, so ONLY blanks are blocked here.
+    if (snapshot.buttons.some((b) => !b.graphic_id || !b.graphic_id.trim())) {
+      applyError = true;
+      setTimeout(() => (applyError = false), 2000);
+      return;
+    }
     try {
       await saveConfig(snapshot);
     } catch (e) {

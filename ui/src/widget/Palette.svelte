@@ -404,13 +404,13 @@
         >☰</div>
         <button class="gear" onclick={openSettings} title="설정">⚙</button>
         <div class="dots" title="active targets">
-          {#each statuses as s (s.ip)}
+          {#each statuses as s, i (i)}
             <span class="dot {dotClass(s)}" title="{s.name} ({s.ip}) — {s.status}"></span>
           {/each}
         </div>
       </div>
       <div class="grid" style="--cols: {gridTemplate.cols}; --rows: {gridTemplate.rows};">
-        {#each buttons as btn (btn.graphic_id)}
+        {#each buttons as btn, i (i)}
           <button
             class="trig"
             class:flash={flashId === btn.graphic_id}

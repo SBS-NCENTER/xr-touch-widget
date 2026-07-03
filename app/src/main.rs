@@ -94,13 +94,22 @@ fn main() {
             let win = app.get_webview_window("palette").expect("palette window exists");
             apply_glass(&win);
 
-            let config_path = app
-                .path()
-                .app_config_dir()
-                .expect("app config dir resolvable")
-                .join("config.toml");
+            // Resolve the config path WITHOUT panicking. If the platform config
+            // dir can't be resolved (very rare), fall back to a temp-dir path so
+            // the app still starts and runs with defaults (§8 — the app must come
+            // up). Persistence there may not survive a reboot, but a running app
+            // beats a silent no-window abort.
+            let config_path = match app.path().app_config_dir() {
+                Ok(dir) => dir.join("config.toml"),
+                Err(e) => {
+                    eprintln!("failed to resolve app config dir, using temp fallback: {e}");
+                    std::env::temp_dir()
+                        .join("xr-touch-to-osc")
+                        .join("config.toml")
+                }
+            };
             let (config, outcome) = config::load(&config_path);
-            let load_warning = match outcome {
+            let mut load_warning = match outcome {
                 LoadOutcome::Loaded => None,
                 LoadOutcome::MissingUsedDefault => None, // first run is not an error
                 LoadOutcome::ParseErrorUsedDefault(e) => {
@@ -117,8 +126,37 @@ fn main() {
                 eprintln!("failed to apply saved window size: {e}");
             }
 
-            let socket = OscSocket::bind(config.network.listen_port)
-                .expect("failed to bind OSC listen port");
+            // Bind the OSC socket WITHOUT panicking on a taken port (§8 — the
+            // app must come up). If listen_port is already in use (2nd launch /
+            // stale instance), fall back to an ephemeral port so the trigger
+            // send-path stays alive. Pong reception then degrades — pongs sent
+            // to the real listen_port won't arrive here — but heartbeat is
+            // display-only, so this is acceptable graceful degradation.
+            let socket = match OscSocket::bind(config.network.listen_port) {
+                Ok(s) => s,
+                Err(_) => {
+                    let s = OscSocket::bind(0).map_err(|e| {
+                        // Even an ephemeral bind failed (OS out of sockets/FDs).
+                        // Without any socket the engine can't run at all, so this
+                        // is the one case we surface as a hard error.
+                        format!(
+                            "failed to bind any OSC socket (listen port {} and ephemeral both failed): {e}",
+                            config.network.listen_port
+                        )
+                    })?;
+                    let bind_warning = format!(
+                        "pong 포트 {} 사용 중 — heartbeat 표시 부정확 (트리거는 정상)",
+                        config.network.listen_port
+                    );
+                    // Do NOT clobber a config-parse warning if one is already set
+                    // — combine both so neither is lost.
+                    load_warning = Some(match load_warning {
+                        Some(existing) => format!("{existing} / {bind_warning}"),
+                        None => bind_warning,
+                    });
+                    s
+                }
+            };
             let engine_tx = engine::spawn(app.handle().clone(), config.clone(), socket);
 
             app.manage(AppState {

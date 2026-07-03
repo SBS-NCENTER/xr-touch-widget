@@ -1,5 +1,5 @@
 use std::io;
-use std::net::{SocketAddr, UdpSocket};
+use std::net::{IpAddr, SocketAddr, UdpSocket};
 
 use crate::config::Target;
 use crate::osc::{self, Incoming};
@@ -32,7 +32,23 @@ impl OscSocket {
     }
 
     fn send_bytes(&self, bytes: &[u8], ip: &str, port: u16) -> SendReport {
-        match self.socket.send_to(bytes, (ip, port)) {
+        // Parse the destination as an IP literal FIRST. A raw (&str, u16)
+        // target otherwise triggers a BLOCKING DNS resolve for any non-literal
+        // string (typo'd IP, hostname), which would freeze the single engine
+        // thread (trigger + heartbeat) for seconds on-air. A bad IP becomes an
+        // instant failed SendReport instead — the engine's !report.ok path
+        // already logs + marks the link lost (red dot) rather than freezing.
+        let addr = match ip.parse::<IpAddr>() {
+            Ok(addr) => addr,
+            Err(_) => {
+                return SendReport {
+                    ip: ip.to_string(),
+                    ok: false,
+                    error: Some("invalid IP: not an IP literal".into()),
+                };
+            }
+        };
+        match self.socket.send_to(bytes, SocketAddr::new(addr, port)) {
             Ok(_) => SendReport { ip: ip.to_string(), ok: true, error: None },
             Err(e) => SendReport { ip: ip.to_string(), ok: false, error: Some(e.to_string()) },
         }
@@ -48,8 +64,10 @@ impl OscSocket {
             .collect()
     }
 
-    /// Pings every registered target, active or not (status visible before switching).
-    pub fn send_ping_all(&self, targets: &[Target], ue_port: u16) -> Vec<SendReport> {
+    /// Sends a ping to each target in the given list. Caller filters to active
+    /// per D13 (the engine passes only active targets; this primitive does not
+    /// filter — it sends to whatever list it is handed).
+    pub fn send_ping(&self, targets: &[Target], ue_port: u16) -> Vec<SendReport> {
         let bytes = osc::encode_ping();
         targets
             .iter()
@@ -108,8 +126,11 @@ mod tests {
         let osc_sock = OscSocket::bind(0).unwrap();
         let listen_port = osc_sock.local_port();
 
-        let targets = vec![target("127.0.0.1", false)]; // inactive still pinged
-        let reports = osc_sock.send_ping_all(&targets, ue_port);
+        // The primitive ignores the active flag — it sends to whatever list it
+        // is handed; the caller (engine) filters to active per D13. Passing an
+        // inactive target here just exercises that no-filter contract.
+        let targets = vec![target("127.0.0.1", false)];
+        let reports = osc_sock.send_ping(&targets, ue_port);
         assert_eq!(reports.len(), 1);
 
         // fake UE receives ping, replies pong to source ip + listen_port
@@ -144,5 +165,24 @@ mod tests {
         assert_eq!(reports.len(), 1);
         assert!(!reports[0].ok);
         assert!(reports[0].error.is_some(), "failed send should carry an error detail");
+    }
+
+    #[test]
+    fn non_ip_literal_target_fails_without_dns_resolve() {
+        let osc_sock = OscSocket::bind(0).unwrap();
+        // A hostname / typo'd IP is NOT an IP literal. It must be rejected up
+        // front (instant failed SendReport) so the engine thread never enters a
+        // blocking DNS resolve on-air. "localhost" would resolve if we let it
+        // through; the point of this test is that we DON'T.
+        let targets = vec![target("localhost", true)];
+        let reports = osc_sock.send_trigger("g1", &targets, 9000);
+
+        assert_eq!(reports.len(), 1);
+        assert!(!reports[0].ok, "a non-IP-literal target must fail");
+        assert_eq!(reports[0].ip, "localhost");
+        assert_eq!(
+            reports[0].error.as_deref(),
+            Some("invalid IP: not an IP literal")
+        );
     }
 }

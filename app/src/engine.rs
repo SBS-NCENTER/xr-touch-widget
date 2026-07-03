@@ -43,7 +43,18 @@ pub fn spawn(app: AppHandle, mut config: Config, socket: OscSocket) -> Sender<En
                     }
                 }
                 Ok(EngineCmd::UpdateConfig(new_config)) => {
-                    hb = Heartbeat::new(new_config.network.heartbeat_timeout_misses);
+                    // Only rebuild the Heartbeat when the timeout threshold
+                    // actually changed. Rebuilding wipes all link state, so an
+                    // unconditional rebuild flickers every active status dot to
+                    // grey for ~1s on EVERY [적용] (even appearance-only edits).
+                    // Its on_tick retain already reconciles added/removed target
+                    // IPs, so keeping the existing hb leaves established targets'
+                    // status stable across applies.
+                    if new_config.network.heartbeat_timeout_misses
+                        != config.network.heartbeat_timeout_misses
+                    {
+                        hb = Heartbeat::new(new_config.network.heartbeat_timeout_misses);
+                    }
                     config = new_config;
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -68,7 +79,7 @@ pub fn spawn(app: AppHandle, mut config: Config, socket: OscSocket) -> Sender<En
                 let active: Vec<Target> =
                     config.targets.iter().filter(|t| t.active).cloned().collect();
                 let ips: Vec<String> = active.iter().map(|t| t.ip.clone()).collect();
-                for report in socket.send_ping_all(&active, config.network.ue_port) {
+                for report in socket.send_ping(&active, config.network.ue_port) {
                     if !report.ok {
                         let ip = &report.ip;
                         let e = report.error.as_deref().unwrap_or("unknown error");

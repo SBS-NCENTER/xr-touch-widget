@@ -36,7 +36,7 @@ fn full_loop_trigger_ping_pong_and_heartbeat() {
     let mut hb = Heartbeat::new(3);
     let ips: Vec<String> = targets.iter().map(|t| t.ip.clone()).collect();
 
-    widget.send_ping_all(&targets, ue_port);
+    widget.send_ping(&targets, ue_port);
     hb.on_tick(&ips);
     wait_ms(50);
     assert!(matches!(mock.poll_once(), Some(Event::PingAnswered(_))));
