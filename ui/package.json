@@ -1,0 +1,29 @@
+{
+  "name": "xrt-ui",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "x-dependency-owners": {
+    "shared": [
+      "svelte",
+      "vite",
+      "@sveltejs/vite-plugin-svelte"
+    ],
+    "widget-only": [
+      "@tauri-apps/api"
+    ],
+    "demo-only": []
+  },
+  "devDependencies": {
+    "@sveltejs/vite-plugin-svelte": "^7.1.2",
+    "svelte": "^5.56.4",
+    "vite": "^8.1.3"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.11.1"
+  }
+}

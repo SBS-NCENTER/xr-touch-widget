@@ -1,0 +1,15 @@
+/* Design tokens — single source of truth for widget AND demo (spec §5/§7) */
+:root {
+  --glass-bg: rgba(20, 24, 32, 0.55);
+  --glass-border: rgba(255, 255, 255, 0.14);
+  --glass-highlight: rgba(255, 255, 255, 0.06);
+  --radius: 14px;
+  --accent: #4da3ff;
+  --text: rgba(255, 255, 255, 0.92);
+  --text-dim: rgba(255, 255, 255, 0.55);
+  --status-active: #39d98a;
+  --status-inactive: rgba(255, 255, 255, 0.28);
+  --status-lost: #ff5c5c;
+  --touch-min: 48px; /* minimum touch target size */
+  font-family: 'Segoe UI', 'Pretendard', system-ui, sans-serif;
+}
