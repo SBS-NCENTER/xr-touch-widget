@@ -17,7 +17,7 @@
 - OSC 주소: 트리거 `/xrt/graphic` + string arg(graphic_id), ping `/xrt/ping`(인자 없음), pong `/xrt/pong`(인자 없음). 다른 주소 금지.
 - 포트 기본값: UE 수신 `8000`, 위젯 pong 수신 `8001`. 반드시 config로 변경 가능해야 함.
 - 트리거는 **단발 전송** — 반복 전송(dedupe 방식) 구현 금지 (spec D2, 이중 재생 사고 방지).
-- 트리거는 **active 대상에만**, ping은 **모든 등록 대상에** 전송.
+- 트리거는 **active 대상에만**, ping도 **active 대상에만** (D13, 2026-07-03 — 비활성엔 heartbeat 안 감. 기존 "모든 등록 대상 ping" 대체).
 - heartbeat 기본값: 1000ms 주기, 3회 연속 pong 누락 → Lost.
 - heartbeat은 표시만 한다 — **Lost 장비로의 트리거 전송을 막는 코드 금지** (spec §8).
 - config 파손 시 기본값으로 기동 + 경고 노출 (조용히 죽지 않기).
