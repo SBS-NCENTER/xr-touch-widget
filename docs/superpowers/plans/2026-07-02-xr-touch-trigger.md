@@ -26,8 +26,9 @@
 - 코드·주석·식별자는 English. 사용자 대면 UI 문구는 한국어 가능.
 - 버튼 `type` 필드는 v1에서 `"trigger"`만 — 다른 타입 구현 금지(스키마 확장용 필드일 뿐).
 - (2026-07-03, D8·D9) config `[appearance]`·`[window]` 확장은 전 필드 serde default — 기존 config.toml·기존 테스트와 호환 유지.
-- (2026-07-03, D8) 편집 모드 밖에서는 창 크기 변경 불가(`resizable=false` 유지) — 방송 중 오조작 방지.
+- (2026-07-03, D8) 창은 항상 OS-resizable=false — 크기 변경 경로는 편집 모드 grip(수동 delta→setSize)과 설정 창 preview/적용(D10)뿐. 방송 중 오조작 방지.
 - (2026-07-03, D9) 설정 창은 불투명 고정 — 투명도 설정 대상 아님(vibrancy·transparent 미적용).
+- (2026-07-03, D10) 설정 창의 외형·크기 변경은 실시간 preview(비영속) + [적용] 시에만 config 저장, [뒤로가기] 시 폐기. 프로그램 종료 경로는 설정 창 안에만 둔다(팔레트에 종료 없음).
 
 ---
 
@@ -1847,9 +1848,9 @@ export async function onConfigChanged(cb) {
 - [ ] **Step 2b: appearance 적용** — Palette가 `getConfig()` 및 `onConfigChanged` 수신 시 `config.appearance`를 CSS 변수로 반영: `--glass-bg`(= `bg_tint` RGB + `bg_opacity` 알파 합성), `--accent`, `--btn-fill`(= 흰색 + `button_opacity` 알파). `ui/src/shared/tokens.css`에 `--btn-fill: rgba(255, 255, 255, 0.07)` 토큰 추가, Palette 스타일의 `.trig`/`.gear` 하드코딩 `rgba(255, 255, 255, 0.07)`을 `var(--btn-fill)`로 교체. 브라우저(mock config)에서도 동일 코드 경로로 동작해야 함 — harness에서 확인.
 
 - [ ] **Step 2c: 편집 모드 리사이즈 (D8)** — ☰ 핸들 long-press(~600ms, pointer 이벤트로 touch/마우스 공통 처리) 시 `editMode` 토글:
-  - 편집 모드 중: accent 색 테두리로 모드 상태 상시 표시 + 모서리 resize grip 노출. grip 드래그는 Tauri window API `startResizeDragging(direction)` 사용. 진입 시 `setResizable(true)`, 종료 시 `setResizable(false)`.
+  - 편집 모드 중: accent 색 테두리로 모드 상태 상시 표시 + 모서리 resize grip 노출. grip 드래그는 **수동 delta 리사이즈**: grip pointer capture → 이동량 계산(client 좌표 = logical px) → `setSize(LogicalSize)` (rAF throttle, min 240×64 clamp). 네이티브 `startResizeDragging`은 macOS undecorated 창에서 동작하지 않아 기각(2026-07-03 실기기 검증). 창은 항상 `resizable=false` 유지 — 프로그램적 `setSize`는 resizable 플래그와 무관하므로 unlock 자체가 불필요(잠금이 더 강해짐).
   - 종료 시 `innerSize()`를 읽어 `config.window`에 반영 후 `saveConfig` — 재기동 시 `app/src/main.rs`의 setup에서 저장된 크기를 적용(`set_size`; Rust 쪽 호출이라 ACL 불요).
-  - `app/capabilities/default.json`에 필요한 `core:window:allow-*` 권한 추가 (set-resizable·start-resize-dragging·inner-size 계열 — 정확한 ACL 이름은 구현 시 Tauri v2 문서/런타임 에러 메시지로 확정하고 필요 최소만 추가).
+  - `app/capabilities/default.json`에 필요한 `core:window:allow-*` 권한 추가 (set-size·inner-size 계열 — 정확한 ACL 이름은 구현 시 Tauri v2 문서/빌드 에러로 확정하고 필요 최소만 추가).
   - Tauri 밖 브라우저에서는 편집 모드 UI는 뜨되 window 호출은 조용히 no-op(기존 ipc.js mock 패턴과 동일).
   - 창 크기 잠금 원칙(Global Constraints): 편집 모드 밖에서 리사이즈 경로가 없어야 한다.
 
@@ -1880,11 +1881,12 @@ git commit -m "feat(ui): palette with status dots, trigger flash, edit-mode resi
 ### Task 9: 설정 창 — 장비·버튼 관리 + config-changed 전파
 
 **Files:**
-- Modify: `ui/src/widget/Settings.svelte` (placeholder 교체), `app/src/main.rs` (save_config에서 이벤트 emit), `ui/settings.html` (불투명 배경 — Step 2a)
+- Modify: `ui/src/widget/Settings.svelte` (placeholder 교체), `app/src/main.rs` (save_config에서 이벤트 emit + `quit_app` — Step 2c), `ui/settings.html` (불투명 배경 — Step 2a), `app/capabilities/default.json` (allow-close — Step 2c), `ui/src/widget/ipc.js` (`onAppearancePreview`·preview emit·`quit` 래퍼 — Step 2d)
 
 **Interfaces:**
-- Consumes: `ipc.js`의 `getConfig`/`saveConfig`/`loadWarning` (Task 8), command `open_settings` (Task 7)
+- Consumes: `ipc.js`의 `getConfig`/`saveConfig`/`loadWarning`/`setSize` (Task 8), command `open_settings` (Task 7)
 - Produces: Rust `save_config`가 `"xrt://config-changed"` 이벤트(payload = 새 Config)를 emit — Palette(Task 8)가 이미 구독 중.
+- Produces (D10): 전역 이벤트 `"xrt://appearance-preview"` payload `{appearance, window}` (settings → palette, 비영속 preview) · command `quit_app()` (앱 종료) · 설정 창 상단 드래그 바.
 
 - [ ] **Step 1: save_config에서 이벤트 emit**
 
@@ -2027,14 +2029,27 @@ Run: `cargo build -p xrt-app` → Expected: 컴파일 성공.
 - [ ] **Step 2b: 섹션 3 — 외형 (D9)** — Settings.svelte에 외형 섹션 추가:
   - `appearance.bg_opacity`·`appearance.button_opacity`: `<input type="range">` 0~1 (step 0.01, % 라벨 표시).
   - `appearance.accent`·`appearance.bg_tint`: `<input type="color">`.
-  - 저장은 기존 save 경로 그대로 (`saveConfig` → Rust가 `xrt://config-changed` emit → Task 8 Step 2b가 팔레트 CSS 변수 갱신). 별도 이벤트·커맨드 추가 금지.
+  - 섹션 3에 팔레트 창 크기 `width`/`height` 숫자 입력 추가 (D10 — D8 편집 모드와 공존).
+
+- [ ] **Step 2c: 설정 창 UX — 드래그 바 + 적용/뒤로가기/종료 (D10)**
+  - 상단 타이틀 영역을 명시적 **드래그 바**로: `data-tauri-drag-region`은 드래그 바(와 빈 배경)에만 — 입력 요소·버튼에는 절대 금지.
+  - 기존 [저장] 버튼을 세 버튼으로 교체: **[적용]** = `saveConfig(draft)` (영속 + `xrt://config-changed` emit → 팔레트 갱신) · **[뒤로가기]** = 미적용 변경 폐기(마지막 저장값 payload로 preview 이벤트 emit해 팔레트 복원) 후 `getCurrentWindow().close()` · **[프로그램 종료]** = 신규 command `quit_app` 호출.
+  - `app/src/main.rs`: `#[tauri::command] fn quit_app(app: AppHandle) { app.exit(0); }` + invoke_handler 등록. `app/capabilities/default.json`에 `core:window:allow-close` 추가(정확한 ACL 이름은 빌드로 확정).
+
+- [ ] **Step 2d: 실시간 preview (D10)**
+  - 설정 창은 draft 상태를 로컬로 편집. 외형·크기 입력 변경 즉시 전역 이벤트 `xrt://appearance-preview` (payload `{appearance, window}`) emit.
+  - 팔레트 쪽: `ipc.js`에 `onAppearancePreview(cb)` listener 추가, Palette가 수신 시 appearance는 CSS 변수로, window 크기는 `setSize`로 **비영속** 반영 (config 저장 없음).
+  - [적용] 없이 [뒤로가기] 시: settings가 마지막 저장값 payload로 같은 이벤트를 emit → 팔레트 복원 → 창 닫기.
+  - 장비/버튼 목록 변경은 preview 대상 아님 — [적용] 시에만 반영.
 
 - [ ] **Step 3: 왕복 검증**
 
 Run: 터미널 1 `cargo run -p mock-xr`, 터미널 2 (app/) `cargo tauri dev`
 Expected:
 - ⚙ → 설정 창(**불투명**)이 열림. 두 번 눌러도 창이 중복 생성되지 않음(포커스만).
-- 외형 슬라이더(배경/버튼 투명도)·색상 조절 → 저장 → 팔레트 look 즉시 변화, 앱 재시작 후에도 유지.
+- 상단 드래그 바로 설정 창 이동 가능, 입력 필드에서는 드래그 안 됨.
+- 외형 슬라이더·색상·크기 조작 → **적용 전에 즉시** 팔레트에 preview 반영. [뒤로가기] → 변경 폐기·팔레트가 저장값으로 복원·창 닫힘.
+- [적용] → config 저장, 앱 재시작 후에도 유지. [프로그램 종료] → 앱 완전 종료.
 - 장비 활성 checkbox 토글 → 저장 → 팔레트 상태점이 즉시 채움/빈 점으로 바뀜.
 - 버튼 추가(라벨 `TEST`, graphic_id `test_1`) → 저장 → 팔레트에 즉시 나타나고, 누르면 mock-xr에 `TRIGGER  graphic_id=test_1`.
 - 앱 재시작 후에도 설정 유지 (config.toml 저장 확인).
