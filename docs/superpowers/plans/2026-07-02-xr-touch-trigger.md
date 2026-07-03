@@ -1878,6 +1878,52 @@ git add ui/ crates/core/src/config.rs app/capabilities/default.json app/src/main
 git commit -m "feat(ui): palette with status dots, trigger flash, edit-mode resize, appearance config"
 ```
 
+**Task 8 상태 (2026-07-03): 위 커밋까지 완료·검증됨.** 아래 Task 8b는 실기기 검증 중 나온 레이아웃 재설계 요구(D11·D12)로, 별도 task로 진행.
+
+### Task 8b: 팔레트 레이아웃 오버홀 — 컨트롤 클러스터 + 버튼 그리드 + 폰트 스케일링 (D11·D12)
+
+**Files:**
+- Modify: `crates/core/src/config.rs` (`[layout]` 섹션 + `appearance.highlight_last` — Step 1 TDD), `ui/src/widget/Palette.svelte` (컨트롤 클러스터 분리·그리드 렌더·폰트 스케일·마지막 누름 강조·SE grip only), `ui/src/shared/tokens.css` (필요 시 토큰 추가)
+
+**Interfaces:**
+- Consumes: Task 8의 `ipc.js`(getConfig/onConfigChanged/setSize 등), Task 7 status 이벤트. 계약 변경 없음.
+- Produces: 팔레트가 `config.layout`·`config.appearance.highlight_last`를 렌더에 반영. Task 9의 설정 UI가 이 필드들을 편집·preview.
+
+**핵심 제약(불변):** 트리거 단발·active-only·heartbeat 표시전용·창 항상 resizable=false·편집 모드 밖 리사이즈 경로 없음·shared/GlassPanel 훼손 금지(데모·harness 공유)·code English/UI 한국어 가능·빌드 zero-warning.
+
+- [ ] **Step 1: core config 확장 (TDD)**
+  - `crates/core/src/config.rs`에 `LayoutConfig { horizontal: bool=true, vertical: bool=false, cols: u32=3, rows: u32=2 }` (`[layout]`, 전 필드 serde default) + `AppearanceConfig`에 `highlight_last: bool=false` 추가.
+  - 테스트: `[layout]`/`highlight_last` 없는 기존 TOML 로드 시 기본값 + custom-value roundtrip. **기존 테스트 불변**(Global Constraints — serde default).
+  - RED → GREEN 증거 남길 것.
+
+- [ ] **Step 2: 컨트롤 클러스터 분리 (동적 방향)**
+  - Palette markup을 `[클러스터][그리드]` 2영역으로. 클러스터 = `☰`(drag+long-press) + `⚙`(설정) + 상태점, **이 순서**. flex-shrink:0로 컴팩트, 그리드는 flex:1 min:0.
+  - **방향은 버튼 흐름과 수직(동적, `$derived` off config.layout)**: 세로 버튼 모드(vertical && !horizontal) → 클러스터 가로·상단(.layout=column). 그 외(가로·both·fallback) → 클러스터 세로·좌측(.layout=row). **기본=세로 모드** → 클러스터 가로 상단 + 버튼 1열(창 240×400).
+  - 기존 편집 모드 로직 보존하되 **진입=long-press(600ms)·해제=편집모드에서 ☰ 짧은 탭**(진입시킨 손짓의 release가 즉시 해제하지 않도록 enteredThisGesture 가드). 드래그(≥8px 이동)는 두 모드 모두 창 이동, 토글 안 함.
+  - **⚙는 ☰ 핸들 크기로**(48px 터치 하한 제거 — 세로 클러스터가 좁은 바에 들어가도록). 트리거 그리드 버튼은 무관.
+  - **SE grip only**: 기존 4개 grip 중 우하단 하나만 렌더(나머지 3개 제거). 리사이즈 수식(좌상단 앵커 delta→setSize)은 그대로.
+
+- [ ] **Step 3: 버튼 그리드 렌더 (config.layout)**
+  - 가로만 → 1행(1×N). 세로만 → 1열(N×1). 숫자 무시.
+  - 둘 다 → CSS grid `grid-template-columns: repeat(cols, 1fr)`, 행 우선 채움. 버튼>cols×rows면 **cols 유지·행 자동 확장**(모든 버튼 표시: `grid-auto-rows: 1fr`, rows는 최소 행수 hint). 둘 다 해제 → 1행 fallback.
+  - 그리드가 클러스터 제외한 창 영역을 채우고, 버튼 셀이 창 크기 따라 늘고 줆.
+
+- [ ] **Step 4: 폰트 스케일링 (container query)**
+  - 버튼 컨테이너/셀에 `container-type: size`, 버튼 라벨 `font-size`를 `cqmin`/`clamp()` 기반으로 — 셀이 작아지면 글자도 축소(넘침 방지, 스크린샷 이슈 해결). min/max clamp로 극단값 방어. label overflow는 ellipsis fallback.
+
+- [ ] **Step 5: 마지막 누름 강조 (D12)**
+  - 런타임 `lastPressedId` 상태. `press(btn)`에서 갱신. `appearance.highlight_last`가 true일 때만 해당 버튼 폰트 `font-weight` 살짝 상향. config 저장 없음(재시작 시 초기화).
+
+- [ ] **Step 6: 검증**
+  - `cargo test --workspace`(신규 config 테스트 포함 통과), `cargo build -p xrt-app`(clean), `npm run build --prefix ui`(4 엔트리 zero-warning). GUI 눈검증(그리드 조합·폰트 축소·마지막 누름·SE grip)은 controller/사용자 몫.
+
+- [ ] **Step 7: 커밋 게이트 (사용자 직접)**
+
+```bash
+git add ui/ crates/core/src/config.rs
+git commit -m "feat(ui): palette layout overhaul - control cluster, button grid, font scaling, last-press highlight"
+```
+
 ### Task 9: 설정 창 — 장비·버튼 관리 + config-changed 전파
 
 **Files:**
@@ -2026,10 +2072,12 @@ Run: `cargo build -p xrt-app` → Expected: 컴파일 성공.
 
 - [ ] **Step 2a: 설정 창 불투명화 (D9)** — 설정 창은 불투명 고정 (Task 7의 `open_settings`는 transparent·vibrancy 미적용으로 이미 반영됨). `ui/settings.html`의 body 배경을 `background: #141820`(불투명)으로 변경. Settings.svelte 루트는 GlassPanel 대신 같은 토큰을 쓰는 솔리드 패널 스타일 사용 (backdrop-filter·반투명 배경 금지 — 가독성 우선). 설정 창 투명도를 조절하는 항목은 만들지 않는다.
 
-- [ ] **Step 2b: 섹션 3 — 외형 (D9)** — Settings.svelte에 외형 섹션 추가:
+- [ ] **Step 2b: 섹션 3 — 외형·레이아웃 (D9·D11·D12)** — Settings.svelte에 섹션 추가:
   - `appearance.bg_opacity`·`appearance.button_opacity`: `<input type="range">` 0~1 (step 0.01, % 라벨 표시).
-  - `appearance.accent`·`appearance.bg_tint`: `<input type="color">`.
-  - 섹션 3에 팔레트 창 크기 `width`/`height` 숫자 입력 추가 (D10 — D8 편집 모드와 공존).
+  - `appearance.accent`·`appearance.bg_tint`: `<input type="color">` (항상 6-digit hex → 팔레트 hexToRgb 안전, Task 8 리뷰 minor 자연 해소).
+  - `appearance.highlight_last` (D12): checkbox — 마지막 누른 버튼 강조 on/off.
+  - 팔레트 창 크기 `window.width`/`window.height` 숫자 입력 (D10 — D8 편집 모드와 공존).
+  - **버튼 그리드 (D11)**: `layout.horizontal`·`layout.vertical` checkbox + `layout.cols`(가로수)·`layout.rows`(세로수) number 입력 (가로/세로 라벨).
 
 - [ ] **Step 2c: 설정 창 UX — 드래그 바 + 적용/뒤로가기/종료 (D10)**
   - 상단 타이틀 영역을 명시적 **드래그 바**로: `data-tauri-drag-region`은 드래그 바(와 빈 배경)에만 — 입력 요소·버튼에는 절대 금지.
@@ -2037,8 +2085,8 @@ Run: `cargo build -p xrt-app` → Expected: 컴파일 성공.
   - `app/src/main.rs`: `#[tauri::command] fn quit_app(app: AppHandle) { app.exit(0); }` + invoke_handler 등록. `app/capabilities/default.json`에 `core:window:allow-close` 추가(정확한 ACL 이름은 빌드로 확정).
 
 - [ ] **Step 2d: 실시간 preview (D10)**
-  - 설정 창은 draft 상태를 로컬로 편집. 외형·크기 입력 변경 즉시 전역 이벤트 `xrt://appearance-preview` (payload `{appearance, window}`) emit.
-  - 팔레트 쪽: `ipc.js`에 `onAppearancePreview(cb)` listener 추가, Palette가 수신 시 appearance는 CSS 변수로, window 크기는 `setSize`로 **비영속** 반영 (config 저장 없음).
+  - 설정 창은 draft 상태를 로컬로 편집. 외형·레이아웃·크기 입력 변경 즉시 전역 이벤트 `xrt://appearance-preview` (payload `{appearance, layout, window}`) emit.
+  - 팔레트 쪽: `ipc.js`에 `onAppearancePreview(cb)` listener 추가, Palette가 수신 시 appearance는 CSS 변수로, layout은 그리드 재배치로, window 크기는 `setSize`로 **비영속** 반영 (config 저장 없음). Task 8b가 렌더를 `applyConfig`-류 단일 경로로 만들어 두면 preview는 draft를 그 경로에 통과시키는 것.
   - [적용] 없이 [뒤로가기] 시: settings가 마지막 저장값 payload로 같은 이벤트를 emit → 팔레트 복원 → 창 닫기.
   - 장비/버튼 목록 변경은 preview 대상 아님 — [적용] 시에만 반영.
 
