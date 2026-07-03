@@ -1847,7 +1847,7 @@ export async function onConfigChanged(cb) {
 
 - [ ] **Step 2b: appearance 적용** — Palette가 `getConfig()` 및 `onConfigChanged` 수신 시 `config.appearance`를 CSS 변수로 반영: `--glass-bg`(= `bg_tint` RGB + `bg_opacity` 알파 합성), `--accent`, `--btn-fill`(= 흰색 + `button_opacity` 알파). `ui/src/shared/tokens.css`에 `--btn-fill: rgba(255, 255, 255, 0.07)` 토큰 추가, Palette 스타일의 `.trig`/`.gear` 하드코딩 `rgba(255, 255, 255, 0.07)`을 `var(--btn-fill)`로 교체. 브라우저(mock config)에서도 동일 코드 경로로 동작해야 함 — harness에서 확인.
 
-- [ ] **Step 2c: 편집 모드 리사이즈 (D8)** — ☰ 핸들 long-press(~600ms, pointer 이벤트로 touch/마우스 공통 처리) 시 `editMode` 토글:
+- [ ] **Step 2c: 편집 모드 리사이즈 (D8)** — ☰ 핸들 long-press(1000ms, pointer 이벤트로 touch/마우스 공통 처리) 시 `editMode` 진입(해제는 짧은 탭):
   - 편집 모드 중: accent 색 테두리로 모드 상태 상시 표시 + 모서리 resize grip 노출. grip 드래그는 **수동 delta 리사이즈**: grip pointer capture → 이동량 계산(client 좌표 = logical px) → `setSize(LogicalSize)` (rAF throttle, min 240×64 clamp). 네이티브 `startResizeDragging`은 macOS undecorated 창에서 동작하지 않아 기각(2026-07-03 실기기 검증). 창은 항상 `resizable=false` 유지 — 프로그램적 `setSize`는 resizable 플래그와 무관하므로 unlock 자체가 불필요(잠금이 더 강해짐).
   - 종료 시 `innerSize()`를 읽어 `config.window`에 반영 후 `saveConfig` — 재기동 시 `app/src/main.rs`의 setup에서 저장된 크기를 적용(`set_size`; Rust 쪽 호출이라 ACL 불요).
   - `app/capabilities/default.json`에 필요한 `core:window:allow-*` 권한 추가 (set-size·inner-size 계열 — 정확한 ACL 이름은 구현 시 Tauri v2 문서/빌드 에러로 확정하고 필요 최소만 추가).
@@ -1899,7 +1899,7 @@ git commit -m "feat(ui): palette with status dots, trigger flash, edit-mode resi
 - [ ] **Step 2: 컨트롤 클러스터 분리 (동적 방향)**
   - Palette markup을 `[클러스터][그리드]` 2영역으로. 클러스터 = `☰`(drag+long-press) + `⚙`(설정) + 상태점, **이 순서**. flex-shrink:0로 컴팩트, 그리드는 flex:1 min:0.
   - **방향은 버튼 흐름과 수직(동적, `$derived` off config.layout)**: 세로 버튼 모드(vertical && !horizontal) → 클러스터 가로·상단(.layout=column). 그 외(가로·both·fallback) → 클러스터 세로·좌측(.layout=row). **기본=세로 모드** → 클러스터 가로 상단 + 버튼 1열(창 240×400).
-  - 기존 편집 모드 로직 보존하되 **진입=long-press(600ms)·해제=편집모드에서 ☰ 짧은 탭**(진입시킨 손짓의 release가 즉시 해제하지 않도록 enteredThisGesture 가드). 드래그(≥8px 이동)는 두 모드 모두 창 이동, 토글 안 함.
+  - 기존 편집 모드 로직 보존하되 **진입=long-press(1000ms)·해제=편집모드에서 ☰ 짧은 탭**(진입시킨 손짓의 release가 즉시 해제하지 않도록 enteredThisGesture 가드). 드래그(≥8px 이동)는 두 모드 모두 창 이동, 토글 안 함. 창 이동(onMoved) 감지 시 진입 타이머 즉시 취소(네이티브 드래그가 pointermove를 삼켜도 커버).
   - **⚙는 ☰ 핸들 크기로**(48px 터치 하한 제거 — 세로 클러스터가 좁은 바에 들어가도록). 트리거 그리드 버튼은 무관.
   - **SE grip only**: 기존 4개 grip 중 우하단 하나만 렌더(나머지 3개 제거). 리사이즈 수식(좌상단 앵커 delta→setSize)은 그대로.
 
