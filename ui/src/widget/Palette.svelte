@@ -28,6 +28,17 @@
   let flashId = $state(null);
   let editMode = $state(false);
 
+  // Button-grid layout (D11) and last-press emphasis (D12) — both driven by
+  // config, with sane fallbacks so the browser harness (whose mock config
+  // may lag the real schema) still renders something reasonable. Initialized
+  // to the product default (vertical, Task 8b) so the pre-config-load frame
+  // matches — applyConfig overwrites it on mount anyway (M-2).
+  let layout = $state({ horizontal: false, vertical: true, cols: 3, rows: 2 });
+  let highlightLast = $state(false);
+  // Runtime-only (D12): which button was pressed last, for the optional
+  // font-weight emphasis. Never saved to config, never restored on launch.
+  let lastPressedId = $state(null);
+
   // Full config kept around outside Svelte state (edit-mode exit needs to
   // patch just `window` and save the whole object back — it never drives
   // a render by itself).
@@ -35,6 +46,18 @@
   let longPressTimer = null;
   let longPressStartX = 0;
   let longPressStartY = 0;
+  // Single-pointer gesture state for the handle press (Task 8b), keyed off
+  // pointerId so a concurrent second finger can't disturb the primary gesture
+  // (I-1). `gesturePointerId` is the active pointer (null = no gesture);
+  // `enteredThisGesture` marks that the long-press just entered edit mode this
+  // gesture (so its OWN pointerup must not immediately exit again);
+  // `movedThisGesture` marks a drag past MOVE_CANCEL_PX (so a drag-release
+  // never toggles — and is also the only state in which a native-window-drag
+  // can swallow the primary pointerup and strand gesturePointerId, so it
+  // doubles as the "a fresh pointerdown may take over" signal). Plain lets.
+  let gesturePointerId = null;
+  let enteredThisGesture = false;
+  let movedThisGesture = false;
 
   // Manual grip-resize session state — plain (non-reactive) lets, nothing
   // here drives a render. `resizing` is null outside an active drag.
@@ -42,6 +65,39 @@
   let resizeRafId = null;
   let pendingW = 0;
   let pendingH = 0;
+  // Bound to the control-cluster element so the resize path can measure its
+  // natural cross-axis extent (Task 8b) and let the window shrink to hug it.
+  let clusterEl;
+
+  // --- Button grid (Task 8b/D11): config.layout drives cols/rows as CSS
+  // custom properties consumed by the .grid rule below. `grid-auto-rows: 1fr`
+  // there lets the browser add further implicit rows (sized the same as the
+  // templated ones) whenever there are more buttons than the configured
+  // cols x rows slots — so `rows` behaves as a MINIMUM row count (actual
+  // rows = max(rows, ceil(buttonCount / cols))) and no button is ever
+  // hidden or clipped, without any row-count math needed here in JS. ---
+  let gridTemplate = $derived.by(() => {
+    const { horizontal, vertical, cols, rows } = layout;
+    if (horizontal && vertical) {
+      return { cols: Math.max(1, cols), rows: Math.max(1, rows) };
+    }
+    if (vertical) {
+      // Vertical-only: a single column. Extra rows beyond the first come
+      // from grid-auto-rows (stylesheet), so only 1 needs templating here.
+      return { cols: 1, rows: 1 };
+    }
+    // Horizontal-only, or neither checkbox set (fallback): a single row,
+    // one column per button. cols/rows numbers are ignored either way.
+    return { cols: Math.max(1, buttons.length), rows: 1 };
+  });
+
+  // Cluster orientation is always PERPENDICULAR to the button flow (Task 8b).
+  // Vertical-only button mode flows buttons as a column, so the cluster sits
+  // on TOP and lays out horizontally (.layout = column). Every other mode
+  // (horizontal-only, both/grid, neither/fallback) flows buttons horizontally,
+  // so the cluster sits on the LEFT and stacks vertically (.layout = row) —
+  // this is the intended default. Drives both directions via a class.
+  let clusterOnTop = $derived(layout.vertical && !layout.horizontal);
 
   function hexToRgb(hex) {
     const n = parseInt(hex.replace('#', ''), 16);
@@ -65,6 +121,8 @@
     buttons = config.buttons;
     statuses = config.targets.map((t) => ({ ...t, status: 'Unknown' }));
     applyAppearance(config.appearance);
+    layout = config.layout ?? layout;
+    highlightLast = config.appearance?.highlight_last ?? false;
   }
 
   $effect(() => {
@@ -81,6 +139,7 @@
 
   async function press(btn) {
     flashId = btn.graphic_id;
+    lastPressedId = btn.graphic_id;
     setTimeout(() => (flashId = null), 250);
     await trigger(btn.graphic_id);
   }
@@ -90,34 +149,59 @@
     return s.active ? 'active' : 'inactive';
   }
 
-  // --- Edit mode (D8): long-press the handle toggles it. The window is
-  // NEVER OS-resizable — resize happens only via programmatic setSize from
-  // the grips, and the grips only exist in edit mode, so a live-broadcast
-  // mis-touch can't reshape the palette. ---
+  // --- Edit mode (D8, Task 8b): NORMAL mode → a 600ms long-press on the
+  // handle ENTERS edit mode; EDIT mode → a short stationary tap on the handle
+  // EXITS it. A drag (movement ≥ MOVE_CANCEL_PX) always just moves the window
+  // (native drag region) and never toggles, in either mode. The window is
+  // NEVER OS-resizable — resize happens only via programmatic setSize from the
+  // SE grip, which only exists in edit mode, so a live-broadcast mis-touch
+  // can't reshape the palette. ---
   function handlePointerDown(event) {
-    // Guard against a leaked timer from a prior (e.g. multi-touch double-fire)
-    // pointerdown that never got a matching cancel (finding 2).
+    // Single-pointer gating (I-1): a genuine concurrent second finger landing
+    // on the small handle while a stationary press is active (movedThisGesture
+    // false) is IGNORED — otherwise its flag-reset could make the primary
+    // pointer's release spuriously exit edit mode. A DRAG in progress
+    // (movedThisGesture true) is the only state where the native window-drag
+    // can swallow the primary pointerup and strand gesturePointerId, so once
+    // dragging a fresh pointerdown is allowed to take over rather than be
+    // blocked forever. (When no gesture is active, gesturePointerId is null
+    // and we always start fresh.)
+    if (gesturePointerId !== null && event.pointerId !== gesturePointerId && !movedThisGesture) {
+      return;
+    }
+    // Start (or take over) a fresh gesture keyed to this pointer. cancelLongPress
+    // also clears any leaked timer from a prior gesture (finding 2).
+    gesturePointerId = event.pointerId;
     cancelLongPress();
+    enteredThisGesture = false;
+    movedThisGesture = false;
     longPressStartX = event.clientX;
     longPressStartY = event.clientY;
-    longPressTimer = setTimeout(() => {
-      longPressTimer = null;
-      toggleEditMode();
-    }, LONG_PRESS_MS);
+    // Only arm the enter-edit long-press when NOT already in edit mode; in
+    // edit mode the exit is a tap decided at pointerup, no timer needed.
+    if (!editMode) {
+      longPressTimer = setTimeout(() => {
+        longPressTimer = null;
+        editMode = true;
+        enteredThisGesture = true; // this gesture's pointerup must not exit
+      }, LONG_PRESS_MS);
+    }
   }
 
-  // Cancels the long-press once the pointer has moved past the threshold.
-  // Tauri's native drag region commonly stops delivering pointer events to
-  // the webview once an OS drag session starts, so pointerup/pointercancel
-  // can never be relied on to arrive — a movement threshold checked on
-  // whatever pointermove events do land is the robust signal that this is
-  // a drag, not a long-press-in-place (finding 1).
+  // Tracks drag intent. Tauri's native drag region commonly stops delivering
+  // pointer events to the webview once an OS drag session starts, so
+  // pointerup/pointercancel can never be relied on to arrive — a movement
+  // threshold checked on whatever pointermove events do land is the robust
+  // signal that this is a drag, not a press-in-place (finding 1). Setting
+  // `movedThisGesture` also makes the pointerup exit-check below fail, so a
+  // drag-release never toggles edit mode.
   function handlePointerMove(event) {
-    if (!longPressTimer) return;
+    if (event.pointerId !== gesturePointerId) return; // ignore non-primary pointers
     const dx = event.clientX - longPressStartX;
     const dy = event.clientY - longPressStartY;
     if (Math.hypot(dx, dy) > MOVE_CANCEL_PX) {
-      cancelLongPress();
+      movedThisGesture = true;
+      cancelLongPress(); // a drag in progress must not fire the enter timer
     }
   }
 
@@ -128,20 +212,67 @@
     }
   }
 
-  async function toggleEditMode() {
-    if (editMode) {
-      // Exiting edit mode just hides the grips (no OS window flag to undo —
-      // the window is never resizable) and persists the final size.
-      editMode = false;
-      const size = await innerSize();
-      if (size && latestConfig) {
-        const config = { ...latestConfig, window: { width: size.width, height: size.height } };
-        latestConfig = config;
-        await saveConfig(config);
-      }
-    } else {
-      editMode = true;
+  async function handlePointerUp(event) {
+    if (event.pointerId !== gesturePointerId) return; // ignore non-primary pointers
+    cancelLongPress();
+    // Exit only on a genuine, separate short tap while in edit mode: NOT the
+    // same pointerup that ended the entering long-press (enteredThisGesture),
+    // and NOT the release of a drag (movedThisGesture). A later stationary tap
+    // then satisfies both and exits.
+    const shouldExit = editMode && !enteredThisGesture && !movedThisGesture;
+    gesturePointerId = null; // gesture over — clear before any await
+    if (shouldExit) await exitEditMode();
+  }
+
+  function handlePointerCancel(event) {
+    if (event.pointerId !== gesturePointerId) return; // ignore non-primary pointers
+    // Ambiguous end of gesture (cancel / left the handle): never toggles.
+    cancelLongPress();
+    gesturePointerId = null;
+  }
+
+  async function exitEditMode() {
+    // Exiting edit mode just hides the grip (no OS window flag to undo — the
+    // window is never resizable) and persists the final size.
+    editMode = false;
+    const size = await innerSize();
+    if (size && latestConfig) {
+      const config = { ...latestConfig, window: { width: size.width, height: size.height } };
+      latestConfig = config;
+      await saveConfig(config);
     }
+  }
+
+  // Natural extent of the control cluster on the given axis ('x' | 'y') in
+  // logical/CSS px, PLUS the fixed chrome outside the cluster on that axis
+  // (the glass border). The cluster is stretched to fill its cross axis, so
+  // its own box can't be measured directly for a natural size — instead we
+  // take the bounding span of its children (their natural, centered
+  // positions), then add the cluster's own padding and the outer chrome
+  // (viewport minus the stretched cluster box). getBoundingClientRect and
+  // innerWidth/Height are CSS px, matching the logical-px resize math, so no
+  // scaleFactor conversion is needed. Returns null if the cluster ref or its
+  // children aren't ready (caller falls back to the fixed floor).
+  function clusterMinExtent(axis) {
+    const el = clusterEl;
+    if (!el || el.children.length === 0) return null;
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const child of el.children) {
+      const r = child.getBoundingClientRect();
+      lo = Math.min(lo, axis === 'x' ? r.left : r.top);
+      hi = Math.max(hi, axis === 'x' ? r.right : r.bottom);
+    }
+    const cs = getComputedStyle(el);
+    const pad =
+      axis === 'x'
+        ? parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight)
+        : parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom);
+    const box = el.getBoundingClientRect();
+    const viewport = axis === 'x' ? window.innerWidth : window.innerHeight;
+    const outerChrome =
+      axis === 'x' ? box.left + (viewport - box.right) : box.top + (viewport - box.bottom);
+    return Math.ceil(hi - lo + pad + outerChrome);
   }
 
   // --- Manual grip resize. The OS-native resize session
@@ -158,7 +289,20 @@
     const startY = event.clientY;
     const start = await innerSize();
     if (!start) return; // browser harness: no real window to resize
-    resizing = { corner, startX, startY, startW: start.width, startH: start.height };
+    // Lower bounds: on the axis PERPENDICULAR to the button flow, let the
+    // window shrink to hug the cluster's measured natural size; keep the
+    // fixed floor on the other axis. Measured now so it reflects the current
+    // dot count / gear size / orientation. Vertical mode (cluster on top) →
+    // clamp WIDTH; horizontal mode (cluster on left) → clamp HEIGHT. Falls
+    // back to the fixed floor if the cluster ref isn't ready.
+    let minW = RESIZE_MIN_W;
+    let minH = RESIZE_MIN_H;
+    if (clusterOnTop) {
+      minW = clusterMinExtent('x') ?? RESIZE_MIN_W;
+    } else {
+      minH = clusterMinExtent('y') ?? RESIZE_MIN_H;
+    }
+    resizing = { corner, startX, startY, startW: start.width, startH: start.height, minW, minH };
   }
 
   function moveResize(event) {
@@ -168,8 +312,8 @@
     // Direction-aware: a west grip grows width when dragging left, etc.
     const west = resizing.corner.includes('w');
     const north = resizing.corner.includes('n');
-    pendingW = Math.max(RESIZE_MIN_W, Math.round(resizing.startW + (west ? -dx : dx)));
-    pendingH = Math.max(RESIZE_MIN_H, Math.round(resizing.startH + (north ? -dy : dy)));
+    pendingW = Math.max(resizing.minW, Math.round(resizing.startW + (west ? -dx : dx)));
+    pendingH = Math.max(resizing.minH, Math.round(resizing.startH + (north ? -dy : dy)));
     // Throttle the IPC to one setSize per frame — never await per move.
     if (resizeRafId === null) {
       resizeRafId = requestAnimationFrame(() => {
@@ -194,42 +338,53 @@
 
 <div class="palette-root" class:editing={editMode}>
   <GlassPanel>
-    <div class="row">
-      <div
-        class="handle"
-        data-tauri-drag-region
-        role="button"
-        tabindex="0"
-        aria-label="드래그로 이동, 길게 눌러 편집 모드"
-        onpointerdown={handlePointerDown}
-        onpointermove={handlePointerMove}
-        onpointerup={cancelLongPress}
-        onpointercancel={cancelLongPress}
-        onpointerleave={cancelLongPress}
-      >☰</div>
-      <div class="dots" title="active targets">
-        {#each statuses as s (s.ip)}
-          <span class="dot {dotClass(s)}" title="{s.name} ({s.ip}) — {s.status}"></span>
+    <div class="layout" class:cluster-top={clusterOnTop}>
+      <!-- Control cluster (Task 8b): handle + gear + status dots, kept
+           together as one group, always PERPENDICULAR to the button flow —
+           a vertical stack on the LEFT by default, a horizontal strip on TOP
+           in vertical-only button mode (class:cluster-top). flex-shrink:0
+           keeps it compact regardless of grid dimensions or window resize. -->
+      <div class="cluster" bind:this={clusterEl}>
+        <div
+          class="handle"
+          data-tauri-drag-region
+          role="button"
+          tabindex="0"
+          aria-label="드래그로 이동 · 길게 눌러 편집 모드 진입 · 편집 중 탭하여 종료"
+          onpointerdown={handlePointerDown}
+          onpointermove={handlePointerMove}
+          onpointerup={handlePointerUp}
+          onpointercancel={handlePointerCancel}
+          onpointerleave={handlePointerCancel}
+        >☰</div>
+        <button class="gear" onclick={openSettings} title="설정">⚙</button>
+        <div class="dots" title="active targets">
+          {#each statuses as s (s.ip)}
+            <span class="dot {dotClass(s)}" title="{s.name} ({s.ip}) — {s.status}"></span>
+          {/each}
+        </div>
+      </div>
+      <div class="grid" style="--cols: {gridTemplate.cols}; --rows: {gridTemplate.rows};">
+        {#each buttons as btn (btn.graphic_id)}
+          <button
+            class="trig"
+            class:flash={flashId === btn.graphic_id}
+            class:last-pressed={highlightLast && lastPressedId === btn.graphic_id}
+            onclick={() => press(btn)}
+          >
+            <span class="label">{btn.label}</span>
+          </button>
         {/each}
       </div>
-      {#each buttons as btn (btn.graphic_id)}
-        <button class="trig" class:flash={flashId === btn.graphic_id} onclick={() => press(btn)}>
-          {btn.label}
-        </button>
-      {/each}
-      <button class="gear" onclick={openSettings} title="설정">⚙</button>
     </div>
     {#if warning}
       <div class="warning">{warning}</div>
     {/if}
   </GlassPanel>
   {#if editMode}
-    <!-- role="presentation" (no tabindex): these grips are pointer/touch-only
-         drag targets, not keyboard-operable controls, so removing them from
-         the accessibility tree is the honest description — not "button". -->
-    <div class="grip nw" role="presentation" onpointerdown={(e) => startResize(e, 'nw')} onpointermove={moveResize} onpointerup={endResize} onpointercancel={endResize} title="드래그로 크기 조절"></div>
-    <div class="grip ne" role="presentation" onpointerdown={(e) => startResize(e, 'ne')} onpointermove={moveResize} onpointerup={endResize} onpointercancel={endResize} title="드래그로 크기 조절"></div>
-    <div class="grip sw" role="presentation" onpointerdown={(e) => startResize(e, 'sw')} onpointermove={moveResize} onpointerup={endResize} onpointercancel={endResize} title="드래그로 크기 조절"></div>
+    <!-- SE-only (Task 8b): the palette is anchored at its top-left (the
+         handle drags the window; setSize keeps that corner fixed), so a
+         single bottom-right grip is enough to grow/shrink it. -->
     <div class="grip se" role="presentation" onpointerdown={(e) => startResize(e, 'se')} onpointermove={moveResize} onpointerup={endResize} onpointercancel={endResize} title="드래그로 크기 조절"></div>
   {/if}
 </div>
@@ -245,16 +400,18 @@
     box-sizing: border-box;
   }
   /* Stretch the shared GlassPanel to the wrapper without touching the
-     component itself (demo/harness reuse it unstretched). Flex keeps the
-     row vertically centered; overflow in a small window clips (body has
-     overflow:hidden — no scrollbars). */
+     component itself (demo/harness reuse it unstretched). The glass is a
+     flex column [layout][warning]; .layout is a flex row OR column
+     [cluster][grid] depending on button flow (see .layout below).
+     overflow:hidden keeps a still-growing grid from poking out past the
+     panel's rounded corners. */
   .palette-root > :global(.glass) {
     width: 100%;
     height: 100%;
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
-    justify-content: center;
+    overflow: hidden;
   }
   .palette-root.editing {
     /* Inset ring: the root now spans the whole viewport, so an outset
@@ -263,45 +420,137 @@
     outline-offset: -3px;
     border-radius: var(--radius);
   }
-  .row {
+
+  /* Layout direction follows the button flow (Task 8b). Default (horizontal /
+     grid / neither) flows buttons horizontally → cluster stacks vertically on
+     the LEFT → .layout is a row. Vertical-only button mode flows buttons as a
+     column → cluster goes horizontal on TOP → .layout is a column. The cluster
+     is always perpendicular to the button flow. min-size:0 on both axes lets
+     the grid child shrink with the window whichever axis it grows along. */
+  .layout {
     display: flex;
+    flex-direction: row;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+  }
+  .layout.cluster-top {
+    flex-direction: column;
+  }
+
+  /* Compact, fixed-size control group (flex-shrink:0 — the grid, not the
+     cluster, absorbs resizing). Its own flex-direction is perpendicular to
+     the button flow: a vertical stack on the LEFT by default, a horizontal
+     strip on TOP in vertical-only mode. justify/align center keeps the group
+     centered along the window edge it is pinned to (and, since the cluster
+     stretches to the cross-axis full size, it never looks stretched). */
+  .cluster {
+    display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 10px;
-    padding: 10px 14px;
+    justify-content: center;
+    gap: 8px;
+    padding: 6px 10px;
     white-space: nowrap;
+    flex-shrink: 0;
+  }
+  .layout.cluster-top .cluster {
+    flex-direction: row;
   }
   .handle {
     cursor: grab;
     color: var(--text-dim);
     font-size: 18px;
+    line-height: 1;
     padding: 6px 4px;
     user-select: none;
     touch-action: none;
   }
-  .dots { display: flex; gap: 6px; padding-right: 4px; }
+  .dots { display: flex; gap: 6px; }
   .dot { width: 10px; height: 10px; border-radius: 50%; }
   .dot.active { background: var(--status-active); }
   .dot.inactive { background: transparent; border: 2px solid var(--status-inactive); }
   .dot.lost { background: var(--status-lost); }
-  .trig, .gear {
-    min-height: var(--touch-min);
-    min-width: var(--touch-min);
-    padding: 0 20px;
+  /* Gear matches the ☰ handle's size (Task 8b): no touch-min floor, same glyph
+     font + padding, borderless/transparent so the three items read as one
+     uniform group and the vertical stack fits within the 96px-tall default
+     bar. Still a <button>, so click + keyboard activation are unchanged. */
+  .gear {
+    padding: 6px 4px;
+    border: none;
+    background: none;
+    appearance: none;
+    color: var(--text-dim);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  /* Button grid (Step 3/D11). --cols/--rows come from the inline style
+     above (gridTemplate). grid-auto-rows lets item overflow beyond the
+     templated rows grow extra rows automatically, sized the same way —
+     see the gridTemplate derivation in the script for the full rationale. */
+  .grid {
+    --cols: 1;
+    --rows: 1;
+    flex: 1;
+    min-height: 0;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: repeat(var(--cols), 1fr);
+    grid-template-rows: repeat(var(--rows), 1fr);
+    grid-auto-rows: 1fr;
+    gap: 8px;
+    padding: 10px 14px;
+  }
+  .trig {
+    /* Step 4/D11: establishes a query container sized by the grid track
+       (not by its own content), so the label below can scale its font off
+       the cell's actual size rather than the viewport. This is the fix for
+       labels overflowing when the window (and so each cell) gets small. */
+    container-type: size;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* No touch-min floor here (unlike .gear): a hard minimum would stop the
+       grid track from shrinking below it, defeating the shrink-then-scale
+       behavior this step exists to deliver. Cell size is the user's call
+       once they've picked cols/rows/window size in edit mode. */
+    min-width: 0;
+    min-height: 0;
+    padding: 4px 10px;
     border: 1px solid var(--glass-border);
     border-radius: calc(var(--radius) - 4px);
     background: var(--btn-fill);
     color: var(--text);
-    font-size: 16px;
+    font-weight: 400;
     cursor: pointer;
+    overflow: hidden;
     transition: transform 0.08s ease, background 0.15s ease;
   }
   .trig:active, .trig.flash { background: var(--accent); transform: scale(0.96); }
-  .gear { padding: 0 14px; color: var(--text-dim); }
+  /* D12: persists until another button is pressed, only when
+     appearance.highlight_last is on (class only applied then). */
+  .trig.last-pressed { font-weight: 600; }
+  .trig .label {
+    display: block;
+    max-width: 100%;
+    /* cqmin = % of the smaller of the cell's own width/height, so the label
+       shrinks together with the cell in either dimension. clamp() bounds it
+       so a huge cell doesn't blow the label up and a tiny one doesn't
+       shrink it to unreadable. */
+    font-size: clamp(10px, 22cqmin, 18px);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .warning {
     padding: 6px 14px 10px;
     color: var(--status-lost);
     font-size: 12px;
     white-space: normal;
+    flex-shrink: 0;
   }
   .grip {
     position: absolute;
@@ -312,10 +561,7 @@
     opacity: 0.9;
     touch-action: none;
   }
-  /* Inset corners: the root spans the whole viewport now, so the old
-     negative offsets would hang off-screen and shrink the touch target. */
-  .grip.nw { top: 3px; left: 3px; cursor: nwse-resize; }
-  .grip.ne { top: 3px; right: 3px; cursor: nesw-resize; }
-  .grip.sw { bottom: 3px; left: 3px; cursor: nesw-resize; }
+  /* Inset corner: the root spans the whole viewport, so the old negative
+     offset would hang off-screen and shrink the touch target. */
   .grip.se { bottom: 3px; right: 3px; cursor: nwse-resize; }
 </style>

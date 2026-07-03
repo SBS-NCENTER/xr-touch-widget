@@ -17,8 +17,11 @@ const mockConfig = {
   // Mirrors crates/core/src/config.rs AppearanceConfig/WindowConfig spec
   // defaults (D8/D9) so the appearance-application code path in
   // Palette.svelte runs identically in the browser harness and in Tauri.
-  appearance: { bg_opacity: 0.55, button_opacity: 0.07, accent: '#4da3ff', bg_tint: '#141820' },
-  window: { width: 720, height: 96 },
+  appearance: { bg_opacity: 0.55, button_opacity: 0.07, accent: '#4da3ff', bg_tint: '#141820', highlight_last: false },
+  window: { width: 240, height: 400 },
+  // Mirrors crates/core/src/config.rs LayoutConfig spec defaults (Task 8b:
+  // vertical-by-default — a single button column).
+  layout: { horizontal: false, vertical: true, cols: 3, rows: 2 },
 };
 
 export async function getConfig() {
