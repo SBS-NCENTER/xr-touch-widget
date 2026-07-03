@@ -333,9 +333,9 @@
   }
   /* Exception: the name/IP/label/graphic_id/number fields must stay
      selectable and editable — user-select is inherited, so re-enable it
-     explicitly on form controls. */
-  input,
-  textarea {
+     explicitly on the inputs. (Settings has no <textarea>; that selector was
+     dead and flagged unused by the Svelte compiler, so it's dropped here.) */
+  input {
     user-select: text;
     -webkit-user-select: text;
   }
@@ -376,14 +376,46 @@
   .actions .apply.error { background: var(--status-lost); }
   .actions .back { color: var(--text-dim); }
   .actions .quit { color: var(--status-lost); }
+  /* Only this body scrolls — the .drag-bar title strip (flex-shrink:0, above)
+     stays fixed. overflow-y:scroll (not auto) permanently reserves the track
+     so the scrollbar is ALWAYS present, not auto-hidden by macOS/WKWebView.
+     .scroll lives INSIDE the rounded .panel (which clips with border-radius +
+     overflow:hidden), so the scrollbar is masked to the panel's rounded
+     bottom-right corner and never pokes past it. */
   .scroll {
     flex: 1;
     min-height: 0;
-    overflow-y: auto;
+    overflow-y: scroll;
     padding: 10px 22px 18px;
     display: flex;
     flex-direction: column;
     gap: 10px;
+  }
+  /* Always-visible, touch-friendly scrollbar — scoped to the settings body
+     only (Svelte scopes these to .scroll in THIS component, so the palette /
+     demo / harness are unaffected). WKWebView honors ::-webkit-scrollbar. The
+     thumb is a light grey that reads clearly at rest against the #2d2d2d
+     settings bg (not hover-only); the transparent border + background-clip
+     insets the thumb so it looks rounded inside the track. */
+  .scroll::-webkit-scrollbar {
+    width: 24px;
+  }
+  .scroll::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.05);
+  }
+  .scroll::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 10px;
+    border: 4px solid transparent;
+    background-clip: padding-box;
+  }
+  .scroll::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.45);
+    background-clip: padding-box;
+  }
+  .scroll::-webkit-scrollbar-thumb:active {
+    background: rgba(255, 255, 255, 0.6);
+    background-clip: padding-box;
   }
   h2 { font-size: 13px; color: var(--text-dim); margin: 12px 0 2px; }
   .grid-row { display: flex; gap: 8px; align-items: center; }
