@@ -7,6 +7,8 @@ pub struct Config {
     pub network: NetworkConfig,
     pub targets: Vec<Target>,
     pub buttons: Vec<ButtonDef>,
+    pub appearance: AppearanceConfig,
+    pub window: WindowConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -46,6 +48,48 @@ pub struct ButtonDef {
 
 fn default_button_type() -> String {
     "trigger".into()
+}
+
+/// Palette look-and-feel, tunable from the settings window (D9, 2026-07-03).
+/// All fields `serde(default)` so a config.toml written before D9 existed
+/// still loads cleanly, with these values filled in from spec defaults.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct AppearanceConfig {
+    pub bg_opacity: f64,
+    pub button_opacity: f64,
+    pub accent: String,
+    pub bg_tint: String,
+}
+
+impl Default for AppearanceConfig {
+    fn default() -> Self {
+        Self {
+            bg_opacity: 0.55,
+            button_opacity: 0.07,
+            accent: "#4da3ff".into(),
+            bg_tint: "#141820".into(),
+        }
+    }
+}
+
+/// Palette window size, saved when edit-mode resize (D8, 2026-07-03) ends
+/// and re-applied on the next launch. All fields `serde(default)` so a
+/// config.toml written before D8 existed still loads cleanly.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct WindowConfig {
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Default for WindowConfig {
+    fn default() -> Self {
+        Self {
+            width: 720,
+            height: 96,
+        }
+    }
 }
 
 /// Result of loading config: the app must always get a usable Config
@@ -109,9 +153,60 @@ mod tests {
             graphic_id: "lower_third_a".into(),
             button_type: "trigger".into(),
         });
+        c.appearance = AppearanceConfig {
+            bg_opacity: 0.4,
+            button_opacity: 0.12,
+            accent: "#ff8800".into(),
+            bg_tint: "#202020".into(),
+        };
+        c.window = WindowConfig {
+            width: 900,
+            height: 120,
+        };
         save(&path, &c).unwrap();
         let (loaded, outcome) = load(&path);
         assert_eq!(loaded, c);
+        assert!(matches!(outcome, LoadOutcome::Loaded));
+    }
+
+    #[test]
+    fn appearance_and_window_have_spec_defaults() {
+        let a = AppearanceConfig::default();
+        assert_eq!(a.bg_opacity, 0.55);
+        assert_eq!(a.button_opacity, 0.07);
+        assert_eq!(a.accent, "#4da3ff");
+        assert_eq!(a.bg_tint, "#141820");
+
+        let w = WindowConfig::default();
+        assert_eq!(w.width, 720);
+        assert_eq!(w.height, 96);
+    }
+
+    #[test]
+    fn missing_appearance_and_window_sections_fall_back_to_defaults() {
+        // Simulates a config.toml written before D8/D9 existed: no
+        // [appearance] or [window] section at all.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+                [network]
+                ue_port = 8000
+                listen_port = 8001
+                heartbeat_interval_ms = 1000
+                heartbeat_timeout_misses = 3
+
+                [[targets]]
+                name = "XR-1"
+                ip = "192.168.0.10"
+                active = true
+            "#,
+        )
+        .unwrap();
+        let (c, outcome) = load(&path);
+        assert_eq!(c.appearance, AppearanceConfig::default());
+        assert_eq!(c.window, WindowConfig::default());
         assert!(matches!(outcome, LoadOutcome::Loaded));
     }
 

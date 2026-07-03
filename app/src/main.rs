@@ -5,7 +5,7 @@ mod engine;
 use std::path::PathBuf;
 use std::sync::{mpsc::Sender, Mutex};
 
-use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, LogicalSize, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use xrt_core::config::{self, Config, LoadOutcome};
 use xrt_core::net::OscSocket;
 
@@ -84,6 +84,15 @@ fn main() {
                     Some(format!("config.toml is broken, started with defaults: {e}"))
                 }
             };
+
+            // Re-apply the size the operator left the palette at during a
+            // previous edit-mode session (D8). Called from Rust, so it
+            // needs no ACL entry — only the JS-invoked edit-mode resize
+            // calls (setResizable/startResizeDragging) do.
+            let size = LogicalSize::new(config.window.width as f64, config.window.height as f64);
+            if let Err(e) = win.set_size(size) {
+                eprintln!("failed to apply saved window size: {e}");
+            }
 
             let socket = OscSocket::bind(config.network.listen_port)
                 .expect("failed to bind OSC listen port");
