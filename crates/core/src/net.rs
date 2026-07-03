@@ -8,6 +8,9 @@ use crate::osc::{self, Incoming};
 pub struct SendReport {
     pub ip: String,
     pub ok: bool,
+    /// Populated with the io::Error's message when `ok` is false, so callers
+    /// can log the actual send-failure reason (spec §8).
+    pub error: Option<String>,
 }
 
 /// One UDP socket, bound to listen_port, used for both sending and receiving.
@@ -29,8 +32,10 @@ impl OscSocket {
     }
 
     fn send_bytes(&self, bytes: &[u8], ip: &str, port: u16) -> SendReport {
-        let ok = self.socket.send_to(bytes, (ip, port)).is_ok();
-        SendReport { ip: ip.to_string(), ok }
+        match self.socket.send_to(bytes, (ip, port)) {
+            Ok(_) => SendReport { ip: ip.to_string(), ok: true, error: None },
+            Err(e) => SendReport { ip: ip.to_string(), ok: false, error: Some(e.to_string()) },
+        }
     }
 
     /// Single shot, active targets only. Never retries (spec D2).
@@ -124,5 +129,20 @@ mod tests {
     fn try_recv_returns_none_when_quiet() {
         let osc_sock = OscSocket::bind(0).unwrap();
         assert!(osc_sock.try_recv().is_none());
+    }
+
+    #[test]
+    fn send_failure_is_reported_with_error_detail() {
+        let osc_sock = OscSocket::bind(0).unwrap();
+        // The socket is bound to an IPv4 address, so sending to an IPv6
+        // literal fails synchronously with an address-family error — a
+        // deterministic way to exercise the failure path without depending
+        // on real network unreachability.
+        let targets = vec![target("::1", true)];
+        let reports = osc_sock.send_trigger("g1", &targets, 9000);
+
+        assert_eq!(reports.len(), 1);
+        assert!(!reports[0].ok);
+        assert!(reports[0].error.is_some(), "failed send should carry an error detail");
     }
 }

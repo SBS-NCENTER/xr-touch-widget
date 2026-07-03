@@ -51,6 +51,14 @@ impl Heartbeat {
     pub fn status(&self, ip: &str) -> LinkStatus {
         self.entries.get(ip).map(|e| e.status).unwrap_or(LinkStatus::Unknown)
     }
+
+    /// Immediate Lost, e.g. when a send fails at socket level (spec §8).
+    pub fn mark_lost(&mut self, ip: &str) {
+        if let Some(entry) = self.entries.get_mut(ip) {
+            entry.misses = self.timeout_misses;
+            entry.status = LinkStatus::Lost;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -126,6 +134,16 @@ mod tests {
         hb.on_tick(&t);
         assert_ne!(hb.status("10.0.0.1"), LinkStatus::Lost, "2 ticks must not reach Lost");
         hb.on_tick(&t);
+        assert_eq!(hb.status("10.0.0.1"), LinkStatus::Lost);
+    }
+
+    #[test]
+    fn mark_lost_forces_lost_even_when_connected() {
+        let mut hb = Heartbeat::new(3);
+        let t = ips(&["10.0.0.1"]);
+        hb.on_tick(&t);
+        hb.on_pong("10.0.0.1");
+        hb.mark_lost("10.0.0.1"); // e.g. socket send error
         assert_eq!(hb.status("10.0.0.1"), LinkStatus::Lost);
     }
 }

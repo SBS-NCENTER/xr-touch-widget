@@ -1,12 +1,100 @@
 #![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
 
-use tauri::Manager;
+mod engine;
+
+use std::path::PathBuf;
+use std::sync::{mpsc::Sender, Mutex};
+
+use tauri::{AppHandle, Manager, State, WebviewUrl, WebviewWindowBuilder};
+use xrt_core::config::{self, Config, LoadOutcome};
+use xrt_core::net::OscSocket;
+
+struct AppState {
+    config_path: PathBuf,
+    config: Mutex<Config>,
+    engine_tx: Sender<engine::EngineCmd>,
+    load_warning: Option<String>,
+}
+
+#[tauri::command]
+fn get_config(state: State<AppState>) -> Config {
+    state.config.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn save_config(state: State<AppState>, config: Config) -> Result<(), String> {
+    config::save(&state.config_path, &config).map_err(|e| e.to_string())?;
+    *state.config.lock().unwrap() = config.clone();
+    let _ = state.engine_tx.send(engine::EngineCmd::UpdateConfig(config));
+    Ok(())
+}
+
+#[tauri::command]
+fn trigger(state: State<AppState>, graphic_id: String) {
+    let _ = state.engine_tx.send(engine::EngineCmd::Trigger(graphic_id));
+}
+
+#[tauri::command]
+fn load_warning(state: State<AppState>) -> Option<String> {
+    state.load_warning.clone()
+}
+
+#[tauri::command]
+fn open_settings(app: AppHandle) {
+    if let Some(win) = app.get_webview_window("settings") {
+        let _ = win.set_focus();
+        return;
+    }
+    // Settings window is opaque by design (D9, 2026-07-03) — readability first,
+    // so no transparent flag and no vibrancy here.
+    let builder = WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
+        .title("XRT Settings")
+        .inner_size(460.0, 620.0)
+        .decorations(false)
+        .always_on_top(true);
+    match builder.build() {
+        Ok(_) => {}
+        Err(e) => eprintln!("failed to open settings window: {e}"),
+    }
+}
 
 fn main() {
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![
+            get_config,
+            save_config,
+            trigger,
+            load_warning,
+            open_settings
+        ])
         .setup(|app| {
             let win = app.get_webview_window("palette").expect("palette window exists");
             apply_glass(&win);
+
+            let config_path = app
+                .path()
+                .app_config_dir()
+                .expect("app config dir resolvable")
+                .join("config.toml");
+            let (config, outcome) = config::load(&config_path);
+            let load_warning = match outcome {
+                LoadOutcome::Loaded => None,
+                LoadOutcome::MissingUsedDefault => None, // first run is not an error
+                LoadOutcome::ParseErrorUsedDefault(e) => {
+                    Some(format!("config.toml is broken, started with defaults: {e}"))
+                }
+            };
+
+            let socket = OscSocket::bind(config.network.listen_port)
+                .expect("failed to bind OSC listen port");
+            let engine_tx = engine::spawn(app.handle().clone(), config.clone(), socket);
+
+            app.manage(AppState {
+                config_path,
+                config: Mutex::new(config),
+                engine_tx,
+                load_warning,
+            });
             Ok(())
         })
         .run(tauri::generate_context!())
