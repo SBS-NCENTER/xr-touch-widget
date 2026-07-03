@@ -25,6 +25,9 @@
 - `ui/package.json`에 `x-dependency-owners` 장부 유지 — 의존성 추가 시 반드시 분류.
 - 코드·주석·식별자는 English. 사용자 대면 UI 문구는 한국어 가능.
 - 버튼 `type` 필드는 v1에서 `"trigger"`만 — 다른 타입 구현 금지(스키마 확장용 필드일 뿐).
+- (2026-07-03, D8·D9) config `[appearance]`·`[window]` 확장은 전 필드 serde default — 기존 config.toml·기존 테스트와 호환 유지.
+- (2026-07-03, D8) 편집 모드 밖에서는 창 크기 변경 불가(`resizable=false` 유지) — 방송 중 오조작 방지.
+- (2026-07-03, D9) 설정 창은 불투명 고정 — 투명도 설정 대상 아님(vibrancy·transparent 미적용).
 
 ---
 
@@ -1539,14 +1542,15 @@ fn open_settings(app: AppHandle) {
         let _ = win.set_focus();
         return;
     }
+    // Settings window is opaque by design (D9, 2026-07-03) — readability first,
+    // so no transparent flag and no vibrancy here.
     let builder = WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
         .title("XRT Settings")
         .inner_size(460.0, 620.0)
-        .transparent(true)
         .decorations(false)
         .always_on_top(true);
     match builder.build() {
-        Ok(win) => apply_glass(&win),
+        Ok(_) => {}
         Err(e) => eprintln!("failed to open settings window: {e}"),
     }
 }
@@ -1651,7 +1655,7 @@ git commit -m "feat(app): engine thread with heartbeat loop + IPC commands + sta
 
 **Files:**
 - Create: `ui/src/widget/ipc.js`
-- Modify: `ui/src/widget/Palette.svelte` (placeholder 교체), `app/capabilities/default.json` (set-size 권한 추가)
+- Modify: `ui/src/widget/Palette.svelte` (placeholder 교체), `app/capabilities/default.json` (편집 모드 window 권한 추가), `crates/core/src/config.rs` (`[appearance]`·`[window]` 섹션 — Step 2a), `ui/src/shared/tokens.css` (`--btn-fill` 토큰 — Step 2b), `app/src/main.rs` (기동 시 저장된 창 크기 적용 — Step 2c)
 
 **Interfaces:**
 - Consumes: Task 7의 commands·`xrt://status` 이벤트
@@ -1775,7 +1779,7 @@ export async function onConfigChanged(cb) {
 
 <GlassPanel>
   <div class="row">
-    <div class="handle" data-tauri-drag-region>⠿</div>
+    <div class="handle" data-tauri-drag-region>☰</div>
     <div class="dots" title="active targets">
       {#each statuses as s (s.ip)}
         <span class="dot {dotClass(s)}" title="{s.name} ({s.ip}) — {s.status}"></span>
@@ -1836,7 +1840,18 @@ export async function onConfigChanged(cb) {
 </style>
 ```
 
-`app/capabilities/default.json`의 permissions에 `"core:window:allow-set-size"`는 **추가하지 않는다** — 창 크기는 v1에서 고정(720×96), 버튼이 넘치면 실장비 튜닝 때 폭 조정. (YAGNI: 동적 리사이즈는 필요해질 때.)
+**추가 요구 (2026-07-03 사용자 결정 — spec D8·D9, §6·§7. 위 Step 2 코드와 충돌 시 이 절이 우선):**
+
+- [ ] **Step 2a: core config 확장 (TDD)** — `crates/core/src/config.rs`에 `[appearance]`(`bg_opacity` 0.55, `button_opacity` 0.07, `accent` "#4da3ff", `bg_tint` "#141820")·`[window]`(`width` 720, `height` 96) 섹션 추가. **전 필드 serde default** — 두 섹션이 없는 기존 TOML 로드 시 기본값이 나오는 테스트 + roundtrip 테스트 확장. 기존 테스트는 깨지면 안 됨 (Global Constraints).
+
+- [ ] **Step 2b: appearance 적용** — Palette가 `getConfig()` 및 `onConfigChanged` 수신 시 `config.appearance`를 CSS 변수로 반영: `--glass-bg`(= `bg_tint` RGB + `bg_opacity` 알파 합성), `--accent`, `--btn-fill`(= 흰색 + `button_opacity` 알파). `ui/src/shared/tokens.css`에 `--btn-fill: rgba(255, 255, 255, 0.07)` 토큰 추가, Palette 스타일의 `.trig`/`.gear` 하드코딩 `rgba(255, 255, 255, 0.07)`을 `var(--btn-fill)`로 교체. 브라우저(mock config)에서도 동일 코드 경로로 동작해야 함 — harness에서 확인.
+
+- [ ] **Step 2c: 편집 모드 리사이즈 (D8)** — ☰ 핸들 long-press(~600ms, pointer 이벤트로 touch/마우스 공통 처리) 시 `editMode` 토글:
+  - 편집 모드 중: accent 색 테두리로 모드 상태 상시 표시 + 모서리 resize grip 노출. grip 드래그는 Tauri window API `startResizeDragging(direction)` 사용. 진입 시 `setResizable(true)`, 종료 시 `setResizable(false)`.
+  - 종료 시 `innerSize()`를 읽어 `config.window`에 반영 후 `saveConfig` — 재기동 시 `app/src/main.rs`의 setup에서 저장된 크기를 적용(`set_size`; Rust 쪽 호출이라 ACL 불요).
+  - `app/capabilities/default.json`에 필요한 `core:window:allow-*` 권한 추가 (set-resizable·start-resize-dragging·inner-size 계열 — 정확한 ACL 이름은 구현 시 Tauri v2 문서/런타임 에러 메시지로 확정하고 필요 최소만 추가).
+  - Tauri 밖 브라우저에서는 편집 모드 UI는 뜨되 window 호출은 조용히 no-op(기존 ipc.js mock 패턴과 동일).
+  - 창 크기 잠금 원칙(Global Constraints): 편집 모드 밖에서 리사이즈 경로가 없어야 한다.
 
 - [ ] **Step 3: harness에서 mock 동작 확인**
 
@@ -1851,19 +1866,21 @@ Expected:
 - 팔레트에 config의 버튼들이 뜸, MOCK 상태점 녹색.
 - 버튼 터치 → mock-xr 터미널에 `TRIGGER  graphic_id=...` 출력.
 - mock-xr 종료 → 3초 내 상태점 빨강.
-- ⠿ 드래그로 창 이동 가능.
+- ☰ 드래그로 창 이동 가능.
+- ☰ long-press → accent 테두리 + 모서리 grip 표시, grip 드래그로 크기 조절, 다시 long-press로 잠금 복귀. 앱 재시작 후 조절된 크기 유지.
+- 평상 모드에서 창 가장자리 드래그로 크기가 바뀌지 않음 (잠금 확인).
 
 - [ ] **Step 5: 커밋 게이트 (사용자 직접)**
 
 ```bash
-git add ui/src/widget/
-git commit -m "feat(ui): palette with status dots, trigger flash, ipc wrapper with browser mock"
+git add ui/ crates/core/src/config.rs app/capabilities/default.json app/src/main.rs
+git commit -m "feat(ui): palette with status dots, trigger flash, edit-mode resize, appearance config"
 ```
 
 ### Task 9: 설정 창 — 장비·버튼 관리 + config-changed 전파
 
 **Files:**
-- Modify: `ui/src/widget/Settings.svelte` (placeholder 교체), `app/src/main.rs` (save_config에서 이벤트 emit)
+- Modify: `ui/src/widget/Settings.svelte` (placeholder 교체), `app/src/main.rs` (save_config에서 이벤트 emit), `ui/settings.html` (불투명 배경 — Step 2a)
 
 **Interfaces:**
 - Consumes: `ipc.js`의 `getConfig`/`saveConfig`/`loadWarning` (Task 8), command `open_settings` (Task 7)
@@ -2003,11 +2020,21 @@ Run: `cargo build -p xrt-app` → Expected: 컴파일 성공.
 </style>
 ```
 
+**추가 요구 (2026-07-03 사용자 결정 — spec D9, §7. 위 Step 2 코드와 충돌 시 이 절이 우선):**
+
+- [ ] **Step 2a: 설정 창 불투명화 (D9)** — 설정 창은 불투명 고정 (Task 7의 `open_settings`는 transparent·vibrancy 미적용으로 이미 반영됨). `ui/settings.html`의 body 배경을 `background: #141820`(불투명)으로 변경. Settings.svelte 루트는 GlassPanel 대신 같은 토큰을 쓰는 솔리드 패널 스타일 사용 (backdrop-filter·반투명 배경 금지 — 가독성 우선). 설정 창 투명도를 조절하는 항목은 만들지 않는다.
+
+- [ ] **Step 2b: 섹션 3 — 외형 (D9)** — Settings.svelte에 외형 섹션 추가:
+  - `appearance.bg_opacity`·`appearance.button_opacity`: `<input type="range">` 0~1 (step 0.01, % 라벨 표시).
+  - `appearance.accent`·`appearance.bg_tint`: `<input type="color">`.
+  - 저장은 기존 save 경로 그대로 (`saveConfig` → Rust가 `xrt://config-changed` emit → Task 8 Step 2b가 팔레트 CSS 변수 갱신). 별도 이벤트·커맨드 추가 금지.
+
 - [ ] **Step 3: 왕복 검증**
 
 Run: 터미널 1 `cargo run -p mock-xr`, 터미널 2 (app/) `cargo tauri dev`
 Expected:
-- ⚙ → 설정 창(glass)이 열림. 두 번 눌러도 창이 중복 생성되지 않음(포커스만).
+- ⚙ → 설정 창(**불투명**)이 열림. 두 번 눌러도 창이 중복 생성되지 않음(포커스만).
+- 외형 슬라이더(배경/버튼 투명도)·색상 조절 → 저장 → 팔레트 look 즉시 변화, 앱 재시작 후에도 유지.
 - 장비 활성 checkbox 토글 → 저장 → 팔레트 상태점이 즉시 채움/빈 점으로 바뀜.
 - 버튼 추가(라벨 `TEST`, graphic_id `test_1`) → 저장 → 팔레트에 즉시 나타나고, 누르면 mock-xr에 `TRIGGER  graphic_id=test_1`.
 - 앱 재시작 후에도 설정 유지 (config.toml 저장 확인).
@@ -2015,8 +2042,8 @@ Expected:
 - [ ] **Step 4: 커밋 게이트 (사용자 직접)**
 
 ```bash
-git add ui/src/widget/Settings.svelte app/src/main.rs
-git commit -m "feat(ui): settings window for targets and buttons with live palette refresh"
+git add ui/src/widget/Settings.svelte ui/settings.html app/src/main.rs
+git commit -m "feat(ui): settings window for targets, buttons and appearance with live palette refresh"
 ```
 
 ### Task 10: 데모 페이지 — 터치 프레젠테이션 콘텐츠
