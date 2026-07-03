@@ -8,11 +8,13 @@
     loadWarning,
     onStatus,
     onConfigChanged,
+    onAppearancePreview,
+    onWindowMoved,
     setSize,
     innerSize,
   } from './ipc.js';
 
-  const LONG_PRESS_MS = 600;
+  const LONG_PRESS_MS = 1000;
   // Movement past this many px cancels the long-press. Chosen to sit above
   // ordinary finger/pointer jitter (a few px) but well below any deliberate
   // drag gesture, so a window-drag-in-progress reliably cancels edit mode
@@ -114,6 +116,12 @@
     root.setProperty('--glass-bg', `rgba(${r}, ${g}, ${b}, ${appearance.bg_opacity})`);
     root.setProperty('--accent', appearance.accent);
     root.setProperty('--btn-fill', `rgba(255, 255, 255, ${appearance.button_opacity})`);
+    // Last-press underline color+opacity (Task 9 P2), composed the same way as
+    // --glass-bg. Falls back to the accent / full opacity if a pre-P2 config
+    // (or a lagging mock) omits the fields, so the underline never goes blank.
+    const hl = hexToRgb(appearance.highlight_color ?? appearance.accent);
+    const hlOpacity = appearance.highlight_opacity ?? 1;
+    root.setProperty('--highlight-underline', `rgba(${hl.r}, ${hl.g}, ${hl.b}, ${hlOpacity})`);
   }
 
   function applyConfig(config) {
@@ -123,6 +131,26 @@
     applyAppearance(config.appearance);
     layout = config.layout ?? layout;
     highlightLast = config.appearance?.highlight_last ?? false;
+    // Task 9: settings' [적용] fires onConfigChanged with the FULL saved
+    // config, which must include the window size taking effect live — same
+    // as a preview, but persistent. Harmless no-op on the initial mount call
+    // (Rust already applied this exact size at setup) since setSize with an
+    // unchanged size is idempotent.
+    if (config.window) setSize(config.window.width, config.window.height);
+  }
+
+  /** Task 9/D10: non-persistent live preview from the settings window while
+   *  it is open. Only appearance/layout/window ever ride this event — never
+   *  buttons/targets (those only take effect through onConfigChanged/Apply),
+   *  so `buttons`/`statuses`/`latestConfig` are deliberately untouched here.
+   *  Reusing applyAppearance/layout-assignment/setSize keeps this on the same
+   *  code path applyConfig uses, per Task 8b's single-render-path design. */
+  function applyPreview(payload) {
+    if (!payload) return;
+    applyAppearance(payload.appearance);
+    if (payload.layout) layout = payload.layout;
+    highlightLast = payload.appearance?.highlight_last ?? highlightLast;
+    if (payload.window) setSize(payload.window.width, payload.window.height);
   }
 
   $effect(() => {
@@ -133,6 +161,23 @@
       warning = await loadWarning();
       unsubs.push(await onStatus((list) => (statuses = list)));
       unsubs.push(await onConfigChanged((config) => applyConfig(config)));
+      unsubs.push(await onAppearancePreview((payload) => applyPreview(payload)));
+      // Cancel an armed enter-timer the moment the window actually moves
+      // (native drag). This is the ONE case the 8px pointermove guard can't
+      // catch, because the OS drag session stops delivering pointermove to
+      // the webview. It only CANCELS an armed enter-timer — never fires an
+      // exit or toggle — and marks the gesture moved so the eventual release
+      // can't spuriously toggle either. Everything else in the gesture state
+      // machine (gesturePointerId gating, enteredThisGesture, exit-on-tap)
+      // is left untouched.
+      unsubs.push(
+        await onWindowMoved(() => {
+          if (longPressTimer) {
+            cancelLongPress();
+            movedThisGesture = true;
+          }
+        }),
+      );
     })();
     return () => unsubs.forEach((u) => u());
   });
@@ -149,7 +194,7 @@
     return s.active ? 'active' : 'inactive';
   }
 
-  // --- Edit mode (D8, Task 8b): NORMAL mode → a 600ms long-press on the
+  // --- Edit mode (D8, Task 8b): NORMAL mode → a 1s long-press on the
   // handle ENTERS edit mode; EDIT mode → a short stationary tap on the handle
   // EXITS it. A drag (movement ≥ MOVE_CANCEL_PX) always just moves the window
   // (native drag region) and never toggles, in either mode. The window is
@@ -398,6 +443,10 @@
     width: 100vw;
     height: 100vh;
     box-sizing: border-box;
+    /* The palette has no text inputs — accidental text selection (e.g. a
+       drag that grabs a button label) is never wanted on the live widget. */
+    user-select: none;
+    -webkit-user-select: none;
   }
   /* Stretch the shared GlassPanel to the wrapper without touching the
      component itself (demo/harness reuse it unstretched). The glass is a
@@ -530,8 +579,24 @@
   }
   .trig:active, .trig.flash { background: var(--accent); transform: scale(0.96); }
   /* D12: persists until another button is pressed, only when
-     appearance.highlight_last is on (class only applied then). */
-  .trig.last-pressed { font-weight: 600; }
+     appearance.highlight_last is on (class only applied then). Calm,
+     persistent emphasis (NOT the press-flash): a heavy weight plus an accent
+     underline UNDER THE LABEL TEXT (spanning only the text, not the button
+     width) so the last-pressed button reads at a glance without mimicking the
+     active/flash state. */
+  .trig.last-pressed { font-weight: 800; }
+  .trig.last-pressed .label {
+    text-decoration: underline;
+    /* Configurable color+opacity (Task 9 P2), set by applyAppearance from
+       appearance.highlight_color/highlight_opacity. Falls back to --accent
+       if the var is never set. */
+    text-decoration-color: var(--highlight-underline, var(--accent));
+    text-decoration-thickness: 2px;
+    /* Offset kept small (2px) and the label carries a padding-bottom (below)
+       so the underline lands INSIDE the label's non-clipped region — see the
+       .label rule for why a larger offset gets clipped. */
+    text-underline-offset: 2px;
+  }
   .trig .label {
     display: block;
     max-width: 100%;
@@ -540,6 +605,15 @@
        so a huge cell doesn't blow the label up and a tiny one doesn't
        shrink it to unreadable. */
     font-size: clamp(10px, 22cqmin, 18px);
+    /* overflow:hidden clips at the PADDING box edge. The last-pressed accent
+       underline sits a couple px below the text baseline — with a tight line
+       box it would fall past the content box and get clipped, showing only
+       the bold weight. This padding-bottom extends the padding box downward,
+       so the underline lands within the visible (non-clipped) region. It is
+       on the BASE label (not just last-pressed) so text position is identical
+       whether or not the underline is shown — no vertical jump on press.
+       ellipsis still clips horizontally (white-space:nowrap) as before. */
+    padding-bottom: 4px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

@@ -17,7 +17,7 @@ const mockConfig = {
   // Mirrors crates/core/src/config.rs AppearanceConfig/WindowConfig spec
   // defaults (D8/D9) so the appearance-application code path in
   // Palette.svelte runs identically in the browser harness and in Tauri.
-  appearance: { bg_opacity: 0.55, button_opacity: 0.07, accent: '#4da3ff', bg_tint: '#141820', highlight_last: false },
+  appearance: { bg_opacity: 0.55, button_opacity: 0.07, accent: '#4da3ff', bg_tint: '#141820', highlight_last: false, highlight_color: '#4da3ff', highlight_opacity: 1.0 },
   window: { width: 240, height: 400 },
   // Mirrors crates/core/src/config.rs LayoutConfig spec defaults (Task 8b:
   // vertical-by-default — a single button column).
@@ -92,6 +92,18 @@ export async function setSize(width, height) {
   return getCurrentWindow().setSize(new LogicalSize(width, height));
 }
 
+/** Fires whenever the OS window actually MOVES (native drag). Returns the
+ *  unlisten fn (browser/no-Tauri fallback: a no-op unlisten, like the other
+ *  wrappers). The palette uses this to cancel an armed edit-mode long-press
+ *  when a window-drag starts: once the OS drag session begins the webview
+ *  stops receiving pointermove, so the pointer-based MOVE_CANCEL_PX guard
+ *  can't see it — actual window movement is the reliable cancel signal. */
+export async function onWindowMoved(cb) {
+  if (!inTauri) return () => {};
+  const { getCurrentWindow } = await import('@tauri-apps/api/window');
+  return getCurrentWindow().onMoved(cb);
+}
+
 /** Current window content size in logical (CSS) pixels, or null outside Tauri. */
 export async function innerSize() {
   if (!inTauri) return null;
@@ -100,4 +112,40 @@ export async function innerSize() {
   const [physical, scaleFactor] = await Promise.all([win.innerSize(), win.scaleFactor()]);
   const logical = physical.toLogical(scaleFactor);
   return { width: Math.round(logical.width), height: Math.round(logical.height) };
+}
+
+// --- Settings live preview (D10, 2026-07-03) ---
+// The settings window edits a local draft and broadcasts it, non-persistently,
+// so the palette can reflect appearance/layout/window changes before the
+// operator commits to [적용]. Payload shape: { appearance, layout, window }.
+
+/** cb receives {appearance, layout, window} — returns unlisten fn */
+export async function onAppearancePreview(cb) {
+  if (!inTauri) return () => {};
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen('xrt://appearance-preview', (e) => cb(e.payload));
+}
+
+/** Broadcast a non-persistent preview payload from the settings window. */
+export async function emitAppearancePreview(payload) {
+  if (!inTauri) return console.log('[mock] emitAppearancePreview', payload);
+  const { emit } = await import('@tauri-apps/api/event');
+  return emit('xrt://appearance-preview', payload);
+}
+
+/** Exit the whole application (settings window's [프로그램 종료]). */
+export async function quit() {
+  if (!inTauri) return console.log('[mock] quit');
+  const { invoke } = await import('@tauri-apps/api/core');
+  return invoke('quit_app');
+}
+
+/** Close the current (settings) window without saving — used by [뒤로가기].
+ *  Routed through ipc.js, like every other Tauri window API, to keep the
+ *  single-gateway rule intact even though the brief only spelled out
+ *  onAppearancePreview/emitAppearancePreview/quit explicitly. */
+export async function closeWindow() {
+  if (!inTauri) return console.log('[mock] closeWindow');
+  const { getCurrentWindow } = await import('@tauri-apps/api/window');
+  return getCurrentWindow().close();
 }

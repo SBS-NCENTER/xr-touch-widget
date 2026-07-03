@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
-use xrt_core::config::Config;
+use xrt_core::config::{Config, Target};
 use xrt_core::heartbeat::{Heartbeat, LinkStatus};
 use xrt_core::net::OscSocket;
 use xrt_core::osc::Incoming;
@@ -61,8 +61,14 @@ pub fn spawn(app: AppHandle, mut config: Config, socket: OscSocket) -> Sender<En
             let interval = Duration::from_millis(config.network.heartbeat_interval_ms);
             if last_tick.elapsed() >= interval {
                 last_tick = Instant::now();
-                let ips: Vec<String> = config.targets.iter().map(|t| t.ip.clone()).collect();
-                for report in socket.send_ping_all(&config.targets, config.network.ue_port) {
+                // Heartbeat policy (D13): ping ONLY active targets. Inactive
+                // targets are never contacted, so they carry no live status and
+                // on_tick forgets any ip not in this list (an active→inactive
+                // flip drops out of tracking, so it can't report a stale state).
+                let active: Vec<Target> =
+                    config.targets.iter().filter(|t| t.active).cloned().collect();
+                let ips: Vec<String> = active.iter().map(|t| t.ip.clone()).collect();
+                for report in socket.send_ping_all(&active, config.network.ue_port) {
                     if !report.ok {
                         let ip = &report.ip;
                         let e = report.error.as_deref().unwrap_or("unknown error");
@@ -71,6 +77,9 @@ pub fn spawn(app: AppHandle, mut config: Config, socket: OscSocket) -> Sender<En
                     }
                 }
                 hb.on_tick(&ips);
+                // Still emit an entry per target so the palette shows a dot for
+                // each (inactive = empty). Inactive targets read Unknown — never
+                // pinged, so their heartbeat status must not surface as stale.
                 let payload: Vec<StatusEntry> = config
                     .targets
                     .iter()
@@ -78,7 +87,11 @@ pub fn spawn(app: AppHandle, mut config: Config, socket: OscSocket) -> Sender<En
                         name: t.name.clone(),
                         ip: t.ip.clone(),
                         active: t.active,
-                        status: hb.status(&t.ip),
+                        status: if t.active {
+                            hb.status(&t.ip)
+                        } else {
+                            LinkStatus::Unknown
+                        },
                     })
                     .collect();
                 let _ = app.emit(STATUS_EVENT, &payload);

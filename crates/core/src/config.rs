@@ -66,6 +66,13 @@ pub struct AppearanceConfig {
     /// side — the palette never writes `lastPressedId` back into config, it
     /// only reads this flag to decide whether to render the emphasis at all.
     pub highlight_last: bool,
+    /// Color of the last-pressed button's accent underline (Task 9 P2). Hex
+    /// string; composed with `highlight_opacity` into an rgba() CSS var by the
+    /// palette. Missing from a pre-P2 config.toml falls back to this default
+    /// via the container-level `#[serde(default)]`, same as every other field.
+    pub highlight_color: String,
+    /// Opacity (0.0–1.0) applied to `highlight_color` for the underline.
+    pub highlight_opacity: f32,
 }
 
 impl Default for AppearanceConfig {
@@ -76,6 +83,8 @@ impl Default for AppearanceConfig {
             accent: "#4da3ff".into(),
             bg_tint: "#141820".into(),
             highlight_last: false,
+            highlight_color: "#4da3ff".into(),
+            highlight_opacity: 1.0,
         }
     }
 }
@@ -201,6 +210,8 @@ mod tests {
             accent: "#ff8800".into(),
             bg_tint: "#202020".into(),
             highlight_last: false,
+            highlight_color: "#00ff00".into(),
+            highlight_opacity: 0.5,
         };
         c.window = WindowConfig {
             width: 900,
@@ -219,6 +230,9 @@ mod tests {
         assert_eq!(a.button_opacity, 0.07);
         assert_eq!(a.accent, "#4da3ff");
         assert_eq!(a.bg_tint, "#141820");
+        // Task 9 P2: configurable last-press underline.
+        assert_eq!(a.highlight_color, "#4da3ff");
+        assert_eq!(a.highlight_opacity, 1.0);
 
         let w = WindowConfig::default();
         assert_eq!(w.width, 240);
@@ -253,6 +267,10 @@ mod tests {
         // Legacy TOML with no [window] resolves to the new tall-narrow default.
         assert_eq!(c.window.width, 240);
         assert_eq!(c.window.height, 400);
+        // Task 9 P2 fields absent from a legacy [appearance]-less TOML still
+        // fall back to their defaults (container-level serde default).
+        assert_eq!(c.appearance.highlight_color, "#4da3ff");
+        assert_eq!(c.appearance.highlight_opacity, 1.0);
         assert!(matches!(outcome, LoadOutcome::Loaded));
     }
 
@@ -347,6 +365,11 @@ mod tests {
         let (c, outcome) = load(&path);
         assert!(!c.appearance.highlight_last);
         assert_eq!(c.appearance.bg_opacity, 0.4);
+        // Task 9 P2: a P1-era [appearance] block carries the D9/D12 fields but
+        // not highlight_color/highlight_opacity — those fall back to defaults
+        // while the present fields (bg_opacity) are preserved.
+        assert_eq!(c.appearance.highlight_color, "#4da3ff");
+        assert_eq!(c.appearance.highlight_opacity, 1.0);
         assert!(matches!(outcome, LoadOutcome::Loaded));
     }
 
