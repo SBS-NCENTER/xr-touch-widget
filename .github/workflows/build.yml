@@ -1,0 +1,51 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # manual "Run workflow" button in the Actions tab
+
+jobs:
+  # Logic tests on Linux. We scope to xrt-core + mock-xr on purpose: the
+  # `xrt-app` (Tauri) crate needs webkit2gtk system deps to even COMPILE on
+  # Linux, and it carries no tests, so `cargo test --workspace` would fail to
+  # build it here for no benefit. xrt-app is compiled on the Windows job below.
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+      - run: cargo test -p xrt-core -p mock-xr
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci --prefix ui
+      - run: npm run build --prefix ui # confirm all 4 Vite entries build
+
+  # Windows installer (.exe / .msi). Only runs if `test` passed, so a broken
+  # commit never burns the slower Windows runner. WebView2 is preinstalled on
+  # windows-latest, so no extra runtime setup is needed.
+  build-windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - run: npm ci --prefix ui
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+      - run: npm install -g @tauri-apps/cli
+      # `tauri build` runs beforeBuildCommand (npm --prefix ui run build) from
+      # the project root, then compiles xrt-app in release and bundles NSIS+MSI.
+      - run: tauri build
+        working-directory: app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xrt-widget-windows
+          path: |
+            target/release/bundle/nsis/*
+            target/release/bundle/msi/*
+          if-no-files-found: error
