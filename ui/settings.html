@@ -5,11 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>XRT Settings</title>
   </head>
-  <!-- Settings window is opaque by design (D9, 2026-07-03) — readability
-       first, no transparency/vibrancy. Neutral dark grey, matching the
-       Settings.svelte .panel background so the rounded window corners never
-       reveal a differently-colored square underneath. -->
-  <body style="margin:0; background:#2d2d2d; user-select:none; -webkit-user-select:none;">
+  <!-- The settings window is TRANSPARENT (Fix 2, 2026-07-08); the visible
+       opaque grey comes ONLY from the rounded Settings.svelte .panel, so the
+       window's corners fall cleanly outside the panel's rounded edge with no
+       square backing peeking out. D9 readability is preserved by the panel
+       itself being solid grey (no blur/translucency). -->
+  <body style="margin:0; background:transparent; user-select:none; -webkit-user-select:none;">
     <div id="app"></div>
     <script type="module" src="/src/widget/settings-main.js"></script>
   </body>
