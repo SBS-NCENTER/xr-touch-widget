@@ -1,0 +1,44 @@
+name: release
+
+# Push a version tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`) to build
+# per-OS installers and publish them as a GitHub Release. The Release then shows
+# up in the repo's right-sidebar "Releases" section with direct download links —
+# unlike the CI `build.yml` artifacts, which live only inside an Actions run.
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    permissions:
+      contents: write # tauri-action needs this to create the Release
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows = the broadcast touchscreen target; macOS = dev/preview.
+        # (No Linux target — the widget ships to Windows.)
+        platform: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+      - run: npm ci --prefix ui
+      # tauri-action builds the frontend (beforeBuildCommand) + the app, bundles
+      # the OS installers, and creates/updates the Release for this tag with the
+      # installers attached. Windows → .exe (NSIS) + .msi ; macOS → .dmg / .app.
+      # macOS builds are unsigned (fine for internal use — Gatekeeper shows an
+      # "unidentified developer" prompt; add signing secrets later if needed).
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: app
+          tagName: ${{ github.ref_name }}
+          releaseName: 'XRT Widget ${{ github.ref_name }}'
+          releaseBody: 'Windows (.exe / .msi) and macOS (.dmg) builds are attached below.'
+          releaseDraft: false
+          prerelease: false
