@@ -9,10 +9,13 @@ const mockConfig = {
     { name: 'XR-1', ip: '192.168.0.10', active: true },
     { name: 'XR-2', ip: '192.168.0.11', active: false },
   ],
+  // D14: each button is a full OSC message — address + a single typed value.
+  // Mirrors crates/core/src/config.rs ButtonDef so the browser harness/preview
+  // matches production.
   buttons: [
-    { label: '그래픽 A', graphic_id: 'graphic_a', type: 'trigger' },
-    { label: '그래픽 B', graphic_id: 'graphic_b', type: 'trigger' },
-    { label: 'CLEAR', graphic_id: 'clear_all', type: 'trigger' },
+    { label: '그래픽 A', address: '/xrt/graphic', value: 'graphic_a', value_type: 'string' },
+    { label: '그래픽 B', address: '/xrt/graphic', value: 'graphic_b', value_type: 'string' },
+    { label: 'CLEAR', address: '/xrt/graphic', value: 'clear_all', value_type: 'string' },
   ],
   // Mirrors crates/core/src/config.rs AppearanceConfig/WindowConfig spec
   // defaults (D8/D9) so the appearance-application code path in
@@ -36,10 +39,10 @@ export async function saveConfig(config) {
   return invoke('save_config', { config });
 }
 
-export async function trigger(graphicId) {
-  if (!inTauri) return console.log('[mock] trigger', graphicId);
+export async function trigger(address, valueType, value) {
+  if (!inTauri) return console.log('[mock] trigger', address, valueType, value);
   const { invoke } = await import('@tauri-apps/api/core');
-  return invoke('trigger', { graphicId });
+  return invoke('trigger', { address, valueType, value });
 }
 
 export async function openSettings() {

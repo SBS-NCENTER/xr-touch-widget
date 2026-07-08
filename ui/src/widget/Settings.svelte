@@ -18,6 +18,10 @@
   let warning = $state(null);
   let appliedFlash = $state(false);
   let applyError = $state(false);
+  // Human-readable reason the last [적용] was blocked (D14 button validation
+  // or a save failure). Shown next to the flashed error affordance; cleared on
+  // the same 2s timer.
+  let applyErrorMsg = $state('');
   // Per-target connection status mirrored from the palette's xrt://status
   // feed (D13, P3): ip -> LinkStatus string ('Connected'|'Lost'|'Unknown').
   // Reflects the SAVED/running config — the engine only pings applied targets.
@@ -111,7 +115,8 @@
     draft.targets.splice(i, 1);
   }
   function addButton() {
-    draft.buttons.push({ label: '', graphic_id: '', type: 'trigger' });
+    // D14: a full OSC message. Same defaults as ButtonDef in config.rs.
+    draft.buttons.push({ label: '', address: '/xrt/graphic', value: '', value_type: 'string' });
   }
   function removeButton(i) {
     draft.buttons.splice(i, 1);
@@ -122,19 +127,91 @@
     [draft.buttons[i], draft.buttons[j]] = [draft.buttons[j], draft.buttons[i]];
   }
 
+  const I32_MIN = -2147483648;
+  const I32_MAX = 2147483647;
+
+  /** Does `rawValue` parse for `valueType`? The SINGLE per-value rule, shared
+   *  by the apply-time validateButtons backstop AND the inline per-field
+   *  .invalid feedback, so both agree exactly. Mirrors the Rust send path
+   *  (osc::arg_for): string/none always OK; int → i32; float → a decimal float
+   *  (the regex rejects the hex/oct/bin literals + "Infinity" that JS Number()
+   *  would wrongly accept but Rust parse::<f32>() rejects; Number.isFinite
+   *  guards the rest); bool → true/false (case-insensitive). */
+  function valueParses(valueType, rawValue) {
+    const value = (rawValue ?? '').trim();
+    if (valueType === 'int') {
+      const num = Number(value);
+      return /^[+-]?\d+$/.test(value) && num >= I32_MIN && num <= I32_MAX;
+    }
+    if (valueType === 'float') {
+      const floatRe = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+      return value !== '' && floatRe.test(value) && Number.isFinite(Number(value));
+    }
+    if (valueType === 'bool') {
+      const lower = value.toLowerCase();
+      return lower === 'true' || lower === 'false';
+    }
+    // string / none: no value constraint.
+    return true;
+  }
+
+  /** Inline feedback: true when a button's value doesn't parse for its current
+   *  value_type, so the value widget can flag itself red BEFORE [적용]. Re-runs
+   *  reactively whenever b.value or b.value_type changes (incl. a type switch). */
+  function valueInvalid(b) {
+    return !valueParses(b.value_type, b.value);
+  }
+
+  /** Validate the button list before it can be saved (D14). Returns a Korean
+   *  error message for the FIRST invalid button, or null if all are OK. Mirrors
+   *  the Rust send path (osc::arg_for) + the OSC address rule so an invalid
+   *  message can never reach the on-air trigger path. */
+  function validateButtons(buttons) {
+    for (let i = 0; i < buttons.length; i++) {
+      const b = buttons[i];
+      const n = i + 1;
+      const address = b.address ?? '';
+      // Address: non-empty, starts with '/', no whitespace anywhere (OSC rule).
+      // The empty case is the "clearly-incomplete button" guard (was graphic_id).
+      if (address.trim() === '') return `버튼 ${n}: 주소(address)를 입력하세요`;
+      if (!address.startsWith('/')) return `버튼 ${n}: 주소는 '/'로 시작해야 합니다`;
+      if (/\s/.test(address)) return `버튼 ${n}: 주소에 공백이 있으면 안 됩니다`;
+      // /xrt/ping and /xrt/pong are the app's fixed heartbeat protocol. A
+      // button aimed at either would make a real UE reply pong, briefly reading
+      // as a false "connected" on the heartbeat, so they are reserved.
+      const trimmedAddr = address.trim();
+      if (trimmedAddr === '/xrt/ping' || trimmedAddr === '/xrt/pong')
+        return `버튼 ${n}: /xrt/ping 과 /xrt/pong 은 heartbeat 전용 주소라 사용할 수 없습니다`;
+      // Typed value must parse for int/float/bool; string/none skip this
+      // (same rule as the inline .invalid feedback, via valueParses).
+      if (!valueParses(b.value_type, b.value)) {
+        if (b.value_type === 'int') return `버튼 ${n}: 정수(int) 값이 올바르지 않습니다`;
+        if (b.value_type === 'float') return `버튼 ${n}: 실수(float) 값이 올바르지 않습니다`;
+        if (b.value_type === 'bool') return `버튼 ${n}: 불린(bool) 값은 true / false 여야 합니다`;
+      }
+    }
+    return null;
+  }
+
+  /** Flash the error affordance with a message, auto-clearing after 2s. */
+  function flashApplyError(message) {
+    applyError = true;
+    applyErrorMsg = message;
+    setTimeout(() => {
+      applyError = false;
+      applyErrorMsg = '';
+    }, 2000);
+  }
+
   /** [적용]: persist the draft (also emits xrt://config-changed via Rust, so
    *  the palette re-applies the FULL config), then rebase `saved` onto it so
    *  a later [뒤로가기] in this same session restores the applied state. */
   async function apply() {
     const snapshot = $state.snapshot(draft);
-    // Defense-in-depth (C3): a button with a blank/whitespace-only graphic_id
-    // triggers nothing on-air. Block the apply and flash the existing error
-    // affordance so the operator notices the missing graphic_id before it goes
-    // live. Duplicates are crash-safe (the palette keys its {#each} by index)
-    // and may be intentional aliasing, so ONLY blanks are blocked here.
-    if (snapshot.buttons.some((b) => !b.graphic_id || !b.graphic_id.trim())) {
-      applyError = true;
-      setTimeout(() => (applyError = false), 2000);
+    // Block the apply on any invalid button so a bad message never goes live.
+    const buttonError = validateButtons(snapshot.buttons);
+    if (buttonError) {
+      flashApplyError(buttonError);
       return;
     }
     try {
@@ -144,8 +221,7 @@
       // side). The operator must never get a silent no-op on a failed apply,
       // so surface a brief visible error state instead of swallowing it.
       console.error('save_config failed', e);
-      applyError = true;
-      setTimeout(() => (applyError = false), 2000);
+      flashApplyError('설정 저장에 실패했습니다');
       return;
     }
     saved = structuredClone(snapshot);
@@ -182,6 +258,7 @@
     </div>
     <div class="scroll">
       {#if warning}<div class="warning">{warning}</div>{/if}
+      {#if applyErrorMsg}<div class="apply-error">{applyErrorMsg}</div>{/if}
 
       <h2>XR 장비</h2>
       {#each draft.targets as t, i}
@@ -198,11 +275,62 @@
       {/each}
       <button class="add" onclick={addTarget}>+ 장비 추가</button>
 
-      <h2>버튼</h2>
+      <h2>버튼 (OSC 메시지)</h2>
       {#each draft.buttons as b, i}
         <div class="grid-row">
-          <input placeholder="라벨" bind:value={b.label} />
-          <input placeholder="graphic_id" bind:value={b.graphic_id} />
+          <input class="col-label" placeholder="라벨" bind:value={b.label} />
+          <input class="col-address" placeholder="주소 (예: /xrt/graphic)" bind:value={b.address} />
+          <!-- Value widget adapts to value_type (Fix 1), but the value is ALWAYS
+               stored as a String: the number inputs bind one-way (value= +
+               oninput) so Svelte never coerces b.value to a number, while the
+               text input and the bool <select> bind the string directly. `none`
+               is disabled (no value is sent). `.invalid` flags a value that
+               won't parse for its type, live, before [적용]. -->
+          {#if b.value_type === 'bool'}
+            <select class="col-value" class:invalid={valueInvalid(b)} bind:value={b.value}>
+              <option value="true">true</option>
+              <option value="false">false</option>
+            </select>
+          {:else if b.value_type === 'none'}
+            <input class="col-value" type="text" placeholder="(값 없음)" disabled />
+          {:else if b.value_type === 'int'}
+            <input
+              class="col-value"
+              class:invalid={valueInvalid(b)}
+              type="number"
+              step="1"
+              inputmode="numeric"
+              placeholder="값"
+              value={b.value}
+              oninput={(e) => (b.value = e.currentTarget.value)}
+            />
+          {:else if b.value_type === 'float'}
+            <input
+              class="col-value"
+              class:invalid={valueInvalid(b)}
+              type="number"
+              step="any"
+              inputmode="decimal"
+              placeholder="값"
+              value={b.value}
+              oninput={(e) => (b.value = e.currentTarget.value)}
+            />
+          {:else}
+            <input
+              class="col-value"
+              type="text"
+              placeholder="값"
+              value={b.value}
+              oninput={(e) => (b.value = e.currentTarget.value)}
+            />
+          {/if}
+          <select class="col-type" bind:value={b.value_type}>
+            <option value="none">none</option>
+            <option value="string">string</option>
+            <option value="int">int</option>
+            <option value="float">float</option>
+            <option value="bool">bool</option>
+          </select>
           <span class="order">
             <button onclick={() => moveButton(i, -1)}>▲</button>
             <button onclick={() => moveButton(i, 1)}>▼</button>
@@ -316,21 +444,20 @@
 
 <style>
   /* Task 9/D9: opaque solid panel, NOT the shared translucent GlassPanel —
-     the settings window has no transparency/vibrancy at all, readability
-     first. Border/radius/text still borrow the shared tokens for a
-     consistent look; background is a hardcoded opaque hex (tokens.css only
-     exposes a translucent --glass-bg). */
+     readability first. Since Fix 2 (2026-07-08) the WINDOW is transparent, so
+     this rounded opaque panel is the ONLY visible surface; the window's own
+     corners fall outside its rounded edge (no square opaque backing peeks out).
+     Fills the viewport exactly and clips to the same 14px radius as
+     round_content_view_corners(&win, 14.0) in open_settings. NO border: on a
+     transparent window a 1px translucent border reads as a faint edge line
+     (esp. along the top), and the solid grey panel needs no outline. */
   .panel {
     width: 100vw;
     height: 100vh;
     box-sizing: border-box;
     /* Neutral dark grey (no blue tint), opaque (D9 — settings never uses
-       transparency/blur). Matches settings.html body so the window's rounded
-       corners never reveal a square background of a different color. */
+       transparency/blur). */
     background: #2d2d2d;
-    border: 1px solid var(--glass-border);
-    /* Matches round_content_view_corners(&win, 14.0) in open_settings so the
-       web content corners align with the rounded window (--radius = 14px). */
     border-radius: var(--radius);
     color: var(--text);
     display: flex;
@@ -341,7 +468,7 @@
     user-select: none;
     -webkit-user-select: none;
   }
-  /* Exception: the name/IP/label/graphic_id/number fields must stay
+  /* Exception: the name/IP/label/address/value/number fields must stay
      selectable and editable — user-select is inherited, so re-enable it
      explicitly on the inputs. (Settings has no <textarea>; that selector was
      dead and flagged unused by the Svelte compiler, so it's dropped here.) */
@@ -443,6 +570,56 @@
   input[type='range'] { min-height: 0; padding: 0; }
   input[type='color'] { min-height: 32px; flex: none; width: 48px; padding: 2px; }
   input[type='number'] { flex: 1; min-width: 0; }
+  /* D14 button row (Fix 3): label NARROW, address + value WIDE (they carry the
+     important OSC fields); the type-select + ▲▼ + ✕ keep their compact sizes.
+     Scoped under .grid-row so `.col-value` on an int/float number input beats
+     the generic input[type='number'] flex rule above (else it would win). */
+  .grid-row .col-label { flex: 0.8; min-width: 0; }
+  .grid-row .col-address { flex: 2.2; min-width: 0; }
+  .grid-row .col-value { flex: 1.5; min-width: 0; }
+  /* Dark-themed selects (Fix 3): the value_type dropdown AND the bool value
+     dropdown match the text inputs. appearance:none drops the native macOS
+     control; a data-URI chevron replaces the arrow it removes, so the selects
+     read as one system with the address/value inputs, not a native control. */
+  select {
+    min-height: 40px;
+    color: var(--text);
+    font-size: 13px;
+    border: 1px solid var(--glass-border);
+    border-radius: 8px;
+    padding: 0 26px 0 10px;
+    appearance: none;
+    -webkit-appearance: none;
+    background-color: rgba(255, 255, 255, 0.07);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath d='M1 3l4 4 4-4' fill='none' stroke='%23a9b1ba' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 9px center;
+    background-size: 10px 10px;
+    cursor: pointer;
+  }
+  /* Type dropdown is fixed-width; the bool value dropdown flexes with the value
+     column (it carries .col-value, styled above). */
+  select.col-type { flex: none; width: 84px; }
+  /* Alignment fix: the bool VALUE <select> must be pixel-identical in width to
+     the value <input>s in the other rows, so the value column (and the type
+     column after it) lines up regardless of a row's type. The generic `select`
+     rule's 26px caret padding is what made this box wider (content-box → that
+     padding expands the outer box). Match the value input's box model EXACTLY —
+     content-box + 0 10px padding + width:100% + min-width:0 — so the caret sits
+     INSIDE the box; true/false are short, so it never overlaps the text. (Only
+     the value-column select; the type-column select keeps its caret padding.) */
+  select.col-value {
+    box-sizing: content-box;
+    width: 100%;
+    min-width: 0;
+    padding: 0 10px;
+  }
+  /* Inline invalid feedback (Fix 1): red border the moment a value doesn't
+     parse for its type — on both the int/float number inputs and the bool
+     select. Higher specificity than the base input/select border. */
+  .col-value.invalid { border-color: var(--status-lost); }
+  /* `none` value field: disabled + muted (no value is sent for none). */
+  .col-value:disabled { opacity: 0.5; cursor: not-allowed; }
   .chk { display: flex; align-items: center; gap: 4px; color: var(--text); font-size: 13px; }
   /* Per-target connection dot (D13/P3), same color semantics as the palette
      dots. Only rendered for active rows present in the running status map. */
@@ -478,4 +655,5 @@
   .del { color: var(--status-lost); }
   .add { color: var(--text-dim); }
   .warning { color: var(--status-lost); font-size: 12px; }
+  .apply-error { color: var(--status-lost); font-size: 12px; font-weight: 600; }
 </style>

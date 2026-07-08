@@ -3,13 +3,20 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
-use xrt_core::config::{Config, Target};
+use xrt_core::config::{Config, Target, ValueType};
 use xrt_core::heartbeat::{Heartbeat, LinkStatus};
 use xrt_core::net::OscSocket;
 use xrt_core::osc::Incoming;
 
 pub enum EngineCmd {
-    Trigger(String),
+    /// One trigger press (D14): the full OSC message spec — arbitrary address
+    /// plus a single typed value. The engine hands it straight to
+    /// send_trigger, which encodes once and filters to active targets.
+    Trigger {
+        address: String,
+        value_type: ValueType,
+        value: String,
+    },
     UpdateConfig(Config),
 }
 
@@ -32,8 +39,14 @@ pub fn spawn(app: AppHandle, mut config: Config, socket: OscSocket) -> Sender<En
         loop {
             // 1) handle a pending command (50ms poll keeps loop responsive)
             match rx.recv_timeout(Duration::from_millis(50)) {
-                Ok(EngineCmd::Trigger(id)) => {
-                    for report in socket.send_trigger(&id, &config.targets, config.network.ue_port) {
+                Ok(EngineCmd::Trigger { address, value_type, value }) => {
+                    for report in socket.send_trigger(
+                        &address,
+                        value_type,
+                        &value,
+                        &config.targets,
+                        config.network.ue_port,
+                    ) {
                         if !report.ok {
                             let ip = &report.ip;
                             let e = report.error.as_deref().unwrap_or("unknown error");

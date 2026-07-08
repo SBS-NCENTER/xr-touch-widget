@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::{mpsc::Sender, Mutex};
 
 use tauri::{AppHandle, Emitter, LogicalSize, Manager, State, WebviewUrl, WebviewWindowBuilder};
-use xrt_core::config::{self, Config, LoadOutcome};
+use xrt_core::config::{self, Config, LoadOutcome, ValueType};
 use xrt_core::net::OscSocket;
 
 struct AppState {
@@ -42,8 +42,21 @@ fn quit_app(app: AppHandle) {
 }
 
 #[tauri::command]
-fn trigger(state: State<AppState>, graphic_id: String) {
-    let _ = state.engine_tx.send(engine::EngineCmd::Trigger(graphic_id));
+fn trigger(state: State<AppState>, address: String, value_type: String, value: String) {
+    // Map the JS value_type string → ValueType. Unknown/empty falls back to
+    // String (the safe default): a String arg is always encodable, so a
+    // malformed type tag never blocks the on-air press — it just sends the raw
+    // value as a string rather than panicking or dropping the trigger.
+    let value_type = match value_type.as_str() {
+        "none" => ValueType::None,
+        "int" => ValueType::Int,
+        "float" => ValueType::Float,
+        "bool" => ValueType::Bool,
+        _ => ValueType::String,
+    };
+    let _ = state
+        .engine_tx
+        .send(engine::EngineCmd::Trigger { address, value_type, value });
 }
 
 #[tauri::command]
@@ -57,20 +70,25 @@ fn open_settings(app: AppHandle) {
         let _ = win.set_focus();
         return;
     }
-    // Settings window is opaque by design (D9, 2026-07-03) — readability first,
-    // so no transparent flag and no vibrancy here.
+    // Transparent window whose rounded OPAQUE grey panel (Settings.svelte
+    // .panel) provides the visible surface — the same trick the palette uses.
+    // D9's "opaque/readable content" still holds: the panel is solid grey with
+    // no blur/translucency. Transparency only lets the window's own corners sit
+    // OUTSIDE the panel's rounded edge, so no square opaque backing peeks past
+    // the CSS/objc corner radius (an opaque window showed a sharp corner
+    // sliver). Requires macOSPrivateApi (set in tauri.conf.json).
     let builder = WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
         .title("XRT Settings")
         .inner_size(660.0, 800.0)
         .decorations(false)
+        .transparent(true)
         .always_on_top(true);
     match builder.build() {
         Ok(win) => {
-            // Borderless opaque window → same square-corner issue the palette
-            // has. Reuse the palette's contentView corner rounding so the
-            // window corners match the CSS `border-radius: var(--radius)`
-            // (14px) on the settings panel. macOS-only (the helper is
-            // macOS-gated); a no-op elsewhere.
+            // Clip the contentView to the same 14px radius as the CSS panel so
+            // the transparent window's corners match `border-radius:
+            // var(--radius)` (14px). Composes fine on a transparent window.
+            // macOS-only (the helper is macOS-gated); a no-op elsewhere.
             #[cfg(target_os = "macos")]
             round_content_view_corners(&win, 14.0);
             #[cfg(not(target_os = "macos"))]

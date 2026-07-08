@@ -5,7 +5,9 @@ use xrt_core::osc::{self, Incoming};
 
 #[derive(Debug)]
 pub enum Event {
-    Trigger(String),
+    /// A trigger arrived (D14): its OSC address plus a display string of the
+    /// first argument, or None when the message carried no argument.
+    Trigger { addr: String, arg: Option<String> },
     PingAnswered(SocketAddr),
 }
 
@@ -32,7 +34,7 @@ impl MockXr {
         let mut buf = [0u8; 1536];
         let (n, from) = self.socket.recv_from(&mut buf).ok()?;
         match osc::decode(&buf[..n]) {
-            Incoming::Trigger(id) => Some(Event::Trigger(id)),
+            Incoming::Trigger { addr, arg } => Some(Event::Trigger { addr, arg }),
             Incoming::Ping => {
                 let reply_to = SocketAddr::new(from.ip(), self.reply_port);
                 let _ = self.socket.send_to(&osc::encode_pong(), reply_to);

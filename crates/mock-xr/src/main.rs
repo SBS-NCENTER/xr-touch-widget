@@ -10,7 +10,10 @@ fn main() {
 
     loop {
         match mock.poll_once() {
-            Some(Event::Trigger(id)) => println!("TRIGGER  graphic_id={id}"),
+            Some(Event::Trigger { addr, arg }) => {
+                let arg = arg.as_deref().unwrap_or("(none)");
+                println!("TRIGGER  addr={addr} arg={arg}");
+            }
             Some(Event::PingAnswered(to)) => println!("PING     -> pong to {to}"),
             None => std::thread::sleep(std::time::Duration::from_millis(10)),
         }

@@ -1,5 +1,5 @@
 use mock_xr::{Event, MockXr};
-use xrt_core::config::Target;
+use xrt_core::config::{Target, ValueType};
 use xrt_core::heartbeat::{Heartbeat, LinkStatus};
 use xrt_core::net::OscSocket;
 use xrt_core::osc::Incoming;
@@ -24,13 +24,16 @@ fn full_loop_trigger_ping_pong_and_heartbeat() {
         active: true,
     }];
 
-    // --- trigger path ---
-    widget.send_trigger("stinger_open", &targets, ue_port);
+    // --- trigger path (D14: address + typed value) ---
+    widget.send_trigger("/xrt/graphic", ValueType::String, "stinger_open", &targets, ue_port);
     wait_ms(50);
-    assert!(matches!(
-        mock.poll_once(),
-        Some(Event::Trigger(id)) if id == "stinger_open"
-    ));
+    match mock.poll_once() {
+        Some(Event::Trigger { addr, arg }) => {
+            assert_eq!(addr, "/xrt/graphic");
+            assert_eq!(arg.as_deref(), Some("stinger_open"));
+        }
+        other => panic!("expected trigger at /xrt/graphic, got {other:?}"),
+    }
 
     // --- heartbeat path ---
     let mut hb = Heartbeat::new(3);

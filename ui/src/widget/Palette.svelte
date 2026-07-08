@@ -27,7 +27,10 @@
   let buttons = $state([]);
   let statuses = $state([]);
   let warning = $state(null);
-  let flashId = $state(null);
+  // Press-flash + last-pressed emphasis key off the button INDEX (D14): the
+  // button identity is no longer a unique graphic_id, and the {#each} is
+  // index-keyed, so the index is the stable per-button handle here.
+  let flashIndex = $state(null);
   let editMode = $state(false);
 
   // Button-grid layout (D11) and last-press emphasis (D12) — both driven by
@@ -37,9 +40,9 @@
   // matches — applyConfig overwrites it on mount anyway (M-2).
   let layout = $state({ horizontal: false, vertical: true, cols: 3, rows: 2 });
   let highlightLast = $state(false);
-  // Runtime-only (D12): which button was pressed last, for the optional
+  // Runtime-only (D12): which button INDEX was pressed last, for the optional
   // font-weight emphasis. Never saved to config, never restored on launch.
-  let lastPressedId = $state(null);
+  let lastPressedIndex = $state(null);
 
   // Full config kept around outside Svelte state (edit-mode exit needs to
   // patch just `window` and save the whole object back — it never drives
@@ -182,11 +185,12 @@
     return () => unsubs.forEach((u) => u());
   });
 
-  async function press(btn) {
-    flashId = btn.graphic_id;
-    lastPressedId = btn.graphic_id;
-    setTimeout(() => (flashId = null), 250);
-    await trigger(btn.graphic_id);
+  async function press(btn, i) {
+    flashIndex = i;
+    lastPressedIndex = i;
+    setTimeout(() => (flashIndex = null), 250);
+    // D14: send the button's full OSC message spec (address + typed value).
+    await trigger(btn.address, btn.value_type, btn.value);
   }
 
   function dotClass(s) {
@@ -413,9 +417,9 @@
         {#each buttons as btn, i (i)}
           <button
             class="trig"
-            class:flash={flashId === btn.graphic_id}
-            class:last-pressed={highlightLast && lastPressedId === btn.graphic_id}
-            onclick={() => press(btn)}
+            class:flash={flashIndex === i}
+            class:last-pressed={highlightLast && lastPressedIndex === i}
+            onclick={() => press(btn, i)}
           >
             <span class="label">{btn.label}</span>
           </button>

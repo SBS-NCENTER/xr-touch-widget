@@ -1,7 +1,7 @@
 use std::io;
 use std::net::{IpAddr, SocketAddr, UdpSocket};
 
-use crate::config::Target;
+use crate::config::{Target, ValueType};
 use crate::osc::{self, Incoming};
 
 #[derive(Debug)]
@@ -54,9 +54,33 @@ impl OscSocket {
         }
     }
 
-    /// Single shot, active targets only. Never retries (spec D2).
-    pub fn send_trigger(&self, graphic_id: &str, targets: &[Target], ue_port: u16) -> Vec<SendReport> {
-        let bytes = osc::encode_trigger(graphic_id);
+    /// Single shot, active targets only. Never retries (spec D2). Sends ONE
+    /// OSC message — `address` + a single typed argument from (`value_type`,
+    /// `value`) — built ONCE (D14). If the value can't be encoded (e.g. a bad
+    /// int), every active target's SendReport is a failure carrying that error,
+    /// so a bad value surfaces as a red dot on-air, never a panic.
+    pub fn send_trigger(
+        &self,
+        address: &str,
+        value_type: ValueType,
+        value: &str,
+        targets: &[Target],
+        ue_port: u16,
+    ) -> Vec<SendReport> {
+        let bytes = match osc::encode_trigger(address, value_type, value) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                return targets
+                    .iter()
+                    .filter(|t| t.active)
+                    .map(|t| SendReport {
+                        ip: t.ip.clone(),
+                        ok: false,
+                        error: Some(e.clone()),
+                    })
+                    .collect();
+            }
+        };
         targets
             .iter()
             .filter(|t| t.active)
@@ -106,7 +130,8 @@ mod tests {
         let osc_sock = OscSocket::bind(0).unwrap(); // 0 = ephemeral for tests
 
         let targets = vec![target("127.0.0.1", true), target("127.0.0.2", false)];
-        let reports = osc_sock.send_trigger("g1", &targets, ue_port);
+        let reports =
+            osc_sock.send_trigger("/xrt/graphic", ValueType::String, "g1", &targets, ue_port);
 
         // only the active target got a send attempt
         assert_eq!(reports.len(), 1);
@@ -116,7 +141,10 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(50));
         let mut buf = [0u8; 1024];
         let (n, _) = ue.recv_from(&mut buf).unwrap();
-        assert!(matches!(osc::decode(&buf[..n]), Incoming::Trigger(id) if id == "g1"));
+        assert!(matches!(
+            osc::decode(&buf[..n]),
+            Incoming::Trigger { addr, arg } if addr == "/xrt/graphic" && arg.as_deref() == Some("g1")
+        ));
         assert!(ue.recv_from(&mut buf).is_err(), "no second packet expected");
     }
 
@@ -160,7 +188,7 @@ mod tests {
         // deterministic way to exercise the failure path without depending
         // on real network unreachability.
         let targets = vec![target("::1", true)];
-        let reports = osc_sock.send_trigger("g1", &targets, 9000);
+        let reports = osc_sock.send_trigger("/xrt/graphic", ValueType::String, "g1", &targets, 9000);
 
         assert_eq!(reports.len(), 1);
         assert!(!reports[0].ok);
@@ -175,7 +203,7 @@ mod tests {
         // blocking DNS resolve on-air. "localhost" would resolve if we let it
         // through; the point of this test is that we DON'T.
         let targets = vec![target("localhost", true)];
-        let reports = osc_sock.send_trigger("g1", &targets, 9000);
+        let reports = osc_sock.send_trigger("/xrt/graphic", ValueType::String, "g1", &targets, 9000);
 
         assert_eq!(reports.len(), 1);
         assert!(!reports[0].ok, "a non-IP-literal target must fail");
@@ -184,5 +212,24 @@ mod tests {
             reports[0].error.as_deref(),
             Some("invalid IP: not an IP literal")
         );
+    }
+
+    #[test]
+    fn bad_typed_value_fails_every_active_target_without_panic() {
+        // D14: a value that can't be encoded for its type (int here) must
+        // surface as a failed SendReport for EACH active target — never a
+        // panic — so it shows as a red dot on-air, the same as a bad IP.
+        let osc_sock = OscSocket::bind(0).unwrap();
+        let targets = vec![
+            target("127.0.0.1", true),
+            target("127.0.0.2", true),
+            target("127.0.0.3", false),
+        ];
+        let reports =
+            osc_sock.send_trigger("/xrt/graphic", ValueType::Int, "notanint", &targets, 9000);
+
+        // Only the two active targets, and both are failures carrying the error.
+        assert_eq!(reports.len(), 2);
+        assert!(reports.iter().all(|r| !r.ok && r.error.is_some()));
     }
 }

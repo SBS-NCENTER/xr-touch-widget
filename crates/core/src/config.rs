@@ -39,16 +39,41 @@ pub struct Target {
     pub active: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct ButtonDef {
-    pub label: String,
-    pub graphic_id: String,
-    #[serde(rename = "type", default = "default_button_type")]
-    pub button_type: String,
+/// Type of the single OSC argument a trigger button sends (D14, 2026-07-08).
+/// `None` sends the address with NO argument at all; the rest build one typed
+/// argument from the button's `value` string. Serialized lowercase to match
+/// the settings `<select>` option values and human-friendly config.toml.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ValueType {
+    None,
+    #[default]
+    String,
+    Int,
+    Float,
+    Bool,
 }
 
-fn default_button_type() -> String {
-    "trigger".into()
+/// One trigger button (D14, 2026-07-08). A press sends ONE OSC message:
+/// `address` + a single typed argument built from (`value_type`, `value`),
+/// or no argument when `value_type` is `None`. Every field is
+/// `#[serde(default)]` so a partial `[[buttons]]` entry (or a pre-D14
+/// config that still carries the removed `graphic_id`/`type` keys, which are
+/// now simply unknown fields and ignored) loads cleanly with these defaults.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ButtonDef {
+    #[serde(default)]
+    pub label: String,
+    #[serde(default = "default_address")]
+    pub address: String,
+    #[serde(default)]
+    pub value: String,
+    #[serde(default)]
+    pub value_type: ValueType,
+}
+
+fn default_address() -> String {
+    "/xrt/graphic".into()
 }
 
 /// Palette look-and-feel, tunable from the settings window (D9, 2026-07-03).
@@ -201,8 +226,9 @@ mod tests {
         });
         c.buttons.push(ButtonDef {
             label: "그래픽 A".into(),
-            graphic_id: "lower_third_a".into(),
-            button_type: "trigger".into(),
+            address: "/xrt/graphic".into(),
+            value: "lower_third_a".into(),
+            value_type: ValueType::String,
         });
         c.appearance = AppearanceConfig {
             bg_opacity: 0.4,
@@ -293,14 +319,57 @@ mod tests {
     }
 
     #[test]
-    fn button_type_defaults_to_trigger_when_absent() {
+    fn button_fields_default_when_absent() {
+        // A partial [[buttons]] entry gets the D14 per-field defaults.
+        let toml_str = r#"
+            [[buttons]]
+            label = "A"
+        "#;
+        let c: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(c.buttons[0].label, "A");
+        assert_eq!(c.buttons[0].address, "/xrt/graphic");
+        assert_eq!(c.buttons[0].value, "");
+        assert_eq!(c.buttons[0].value_type, ValueType::String);
+    }
+
+    #[test]
+    fn legacy_button_keys_are_ignored_and_new_fields_default() {
+        // A pre-D14 config.toml carried `graphic_id` + `type`. Those are now
+        // unknown fields — ButtonDef has NO deny_unknown_fields, so serde
+        // silently ignores them and fills the new fields with their defaults.
         let toml_str = r#"
             [[buttons]]
             label = "A"
             graphic_id = "a"
+            type = "trigger"
         "#;
         let c: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(c.buttons[0].button_type, "trigger");
+        assert_eq!(c.buttons[0].label, "A");
+        assert_eq!(c.buttons[0].address, "/xrt/graphic");
+        assert_eq!(c.buttons[0].value, "");
+        assert_eq!(c.buttons[0].value_type, ValueType::String);
+    }
+
+    #[test]
+    fn button_value_type_roundtrips_each_variant() {
+        for vt in [
+            ValueType::None,
+            ValueType::String,
+            ValueType::Int,
+            ValueType::Float,
+            ValueType::Bool,
+        ] {
+            let mut c = Config::default();
+            c.buttons.push(ButtonDef {
+                label: "L".into(),
+                address: "/a/b".into(),
+                value: "1".into(),
+                value_type: vt.clone(),
+            });
+            let text = toml::to_string_pretty(&c).unwrap();
+            let back: Config = toml::from_str(&text).unwrap();
+            assert_eq!(back.buttons[0].value_type, vt);
+        }
     }
 
     // --- Task 8b (D11/D12): [layout] section + appearance.highlight_last ---
