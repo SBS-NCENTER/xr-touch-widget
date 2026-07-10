@@ -1,12 +1,12 @@
 # Windows 실장비 수동 검증 체크리스트
 
-CI artifact `xrt-widget-windows`(NSIS `.exe` / MSI `.msi`)를 터치스크린 PC에 설치 후 확인.
+CI artifact `xr-touch-widget-windows`(NSIS `.exe` / MSI `.msi`)를 터치스크린 PC에 설치 후 확인.
 spec §9 "최종 검증" 단계 — Mac/Linux에서 검증 불가한 항목만 모음.
 
 ## 설치
 - [ ] Windows 버전 확인 후 기록 (10 / 11 — spec §12 미해결 항목 해소)
 - [ ] WebView2 런타임 존재 확인 (Win11 기본 탑재; 없으면 installer 안내대로 설치)
-- [ ] NSIS installer(`xrt-widget_x.y.z_x64-setup.exe`)로 설치 → 실행됨
+- [ ] NSIS installer(`xr-touch-widget_x.y.z_x64-setup.exe`)로 설치 → 실행됨
 
 ## Glass / 창
 - [ ] acrylic 재질이 실제로 보임 (창 뒤 콘텐츠가 블러되어 비침)

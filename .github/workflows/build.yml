@@ -44,7 +44,7 @@ jobs:
         working-directory: app
       - uses: actions/upload-artifact@v4
         with:
-          name: xrt-widget-windows
+          name: xr-touch-widget-windows
           path: |
             target/release/bundle/nsis/*
             target/release/bundle/msi/*

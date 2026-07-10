@@ -113,11 +113,6 @@ fn main() {
             let win = app.get_webview_window("palette").expect("palette window exists");
             apply_glass(&win);
 
-            // Resolve the config path WITHOUT panicking. If the platform config
-            // dir can't be resolved (very rare), fall back to a temp-dir path so
-            // the app still starts and runs with defaults (§8 — the app must come
-            // up). Persistence there may not survive a reboot, but a running app
-            // beats a silent no-window abort.
             // Resolve the DATA BASE dir, then place config.toml under it.
             // PORTABLE mode (a `portable.txt` marker next to the exe) keeps
             // config in the exe's own folder so the whole folder is
@@ -131,10 +126,16 @@ fn main() {
                     std::env::temp_dir().join("xr-touch-to-osc")
                 }
             };
-            let exe_dir = std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-                .unwrap_or_else(|| installed_dir.clone());
+            let exe_dir = match std::env::current_exe() {
+                Ok(exe) => exe
+                    .parent()
+                    .map(|d| d.to_path_buf())
+                    .unwrap_or_else(|| installed_dir.clone()),
+                Err(e) => {
+                    eprintln!("failed to resolve current exe, portable-mode check skipped: {e}");
+                    installed_dir.clone()
+                }
+            };
             let config_path = paths::base_dir(&exe_dir, &installed_dir).join("config.toml");
             let (config, outcome) = config::load(&config_path);
             let mut load_warning = match outcome {

@@ -16,9 +16,10 @@ use std::path::{Path, PathBuf};
 /// installed, so an installed build keeps its `%APPDATA%` behavior.
 pub const PORTABLE_MARKER: &str = "portable.txt";
 
-/// True when a `portable.txt` marker sits next to the executable.
+/// True when a `portable.txt` file sits next to the executable (a directory
+/// of that name does not count).
 pub fn is_portable(exe_dir: &Path) -> bool {
-    exe_dir.join(PORTABLE_MARKER).exists()
+    exe_dir.join(PORTABLE_MARKER).is_file()
 }
 
 /// The data base directory: the exe's own folder in portable mode, else the
