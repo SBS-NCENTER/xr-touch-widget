@@ -451,6 +451,12 @@
      round_content_view_corners(&win, 14.0) in open_settings. NO border: on a
      transparent window a 1px translucent border reads as a faint edge line
      (esp. along the top), and the solid grey panel needs no outline. */
+  /* Windows: opaque rectangular window (transparent WebView2 can't composite
+     on Win11), so fill it edge-to-edge — no rounded corners to expose the
+     opaque window backing at the 4 corners. macOS keeps the rounded panel. */
+  :global(html.platform-windows) .panel {
+    border-radius: 0;
+  }
   .panel {
     width: 100vw;
     height: 100vh;

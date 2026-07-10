@@ -78,11 +78,15 @@ fn open_settings(app: AppHandle) {
     // OUTSIDE the panel's rounded edge, so no square opaque backing peeks past
     // the CSS/objc corner radius (an opaque window showed a sharp corner
     // sliver). Requires macOSPrivateApi (set in tauri.conf.json).
+    // Opaque on Windows: transparent WebView2 doesn't composite its content on
+    // Win11 (the settings panel rendered blank). Elsewhere (macOS) stay
+    // transparent so the rounded panel's corners fall outside the window edge.
+    let transparent = !cfg!(target_os = "windows");
     let builder = WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
         .title("XRT Settings")
         .inner_size(660.0, 800.0)
         .decorations(false)
-        .transparent(true)
+        .transparent(transparent)
         .always_on_top(true);
     match builder.build() {
         Ok(win) => {
@@ -205,11 +209,11 @@ fn main() {
 fn apply_glass(win: &tauri::WebviewWindow) {
     #[cfg(target_os = "windows")]
     {
-        // Acrylic works on Win10 and Win11. Mica (Win11-only) is an
-        // alternative to evaluate during final on-device tuning.
-        if let Err(e) = window_vibrancy::apply_acrylic(win, Some((20, 24, 32, 120))) {
-            eprintln!("acrylic failed (falling back to plain transparency): {e}");
-        }
+        // Windows uses an OPAQUE window (transparent WebView2 fails to composite
+        // its content on Win11 — palette AND settings rendered blank). Acrylic
+        // requires a transparent window, so it is intentionally NOT applied; the
+        // dark UI comes from CSS solid backgrounds (.platform-windows) instead.
+        let _ = win;
     }
     #[cfg(target_os = "macos")]
     {

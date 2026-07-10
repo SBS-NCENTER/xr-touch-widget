@@ -17,4 +17,17 @@
     -webkit-backdrop-filter: blur(18px) saturate(1.3);
     color: var(--text);
   }
+
+  /* Windows runs an OPAQUE window (transparent WebView2 fails to composite its
+     content on Win11 — the palette rendered blank). Swap the translucent glass
+     for a solid tint filling the whole window: no behind-blur to reveal, no
+     rounded corners exposing the opaque window backing. macOS keeps the glass. */
+  :global(html.platform-windows) .glass {
+    background: var(--glass-bg-opaque, #141820);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
 </style>
