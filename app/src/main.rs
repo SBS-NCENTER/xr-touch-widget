@@ -8,6 +8,7 @@ use std::sync::{mpsc::Sender, Mutex};
 use tauri::{AppHandle, Emitter, LogicalSize, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use xrt_core::config::{self, Config, LoadOutcome, ValueType};
 use xrt_core::net::OscSocket;
+use xrt_core::paths;
 
 struct AppState {
     config_path: PathBuf,
@@ -117,15 +118,24 @@ fn main() {
             // the app still starts and runs with defaults (§8 — the app must come
             // up). Persistence there may not survive a reboot, but a running app
             // beats a silent no-window abort.
-            let config_path = match app.path().app_config_dir() {
-                Ok(dir) => dir.join("config.toml"),
+            // Resolve the DATA BASE dir, then place config.toml under it.
+            // PORTABLE mode (a `portable.txt` marker next to the exe) keeps
+            // config in the exe's own folder so the whole folder is
+            // copy-portable; otherwise config lives in the per-user OS config
+            // dir (installed behavior, unchanged). Neither branch panics
+            // (§8 — the app must come up).
+            let installed_dir = match app.path().app_config_dir() {
+                Ok(dir) => dir,
                 Err(e) => {
                     eprintln!("failed to resolve app config dir, using temp fallback: {e}");
-                    std::env::temp_dir()
-                        .join("xr-touch-to-osc")
-                        .join("config.toml")
+                    std::env::temp_dir().join("xr-touch-to-osc")
                 }
             };
+            let exe_dir = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                .unwrap_or_else(|| installed_dir.clone());
+            let config_path = paths::base_dir(&exe_dir, &installed_dir).join("config.toml");
             let (config, outcome) = config::load(&config_path);
             let mut load_warning = match outcome {
                 LoadOutcome::Loaded => None,
