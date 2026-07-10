@@ -1,5 +1,5 @@
 {
-  "$comment": "Windows-only overrides merged over tauri.conf.json at build time. The palette window is OPAQUE on Windows: a transparent WebView2 window fails to composite its content on Windows 11 (palette + settings both rendered blank). This array REPLACES app.windows for Windows builds, so it must mirror the base palette window with transparent:false. macOS/Linux keep transparent:true from tauri.conf.json.",
+  "$schema": "https://schema.tauri.app/config/2",
   "app": {
     "windows": [
       {
