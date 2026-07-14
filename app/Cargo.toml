@@ -3,6 +3,12 @@ name = "xrt-app"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+# Build a PORTABLE binary: config.toml lives next to the exe (copy-portable
+# folder) instead of the per-user OS config dir. Portable and installed are
+# separate builds — `cargo tauri build --features portable` vs the default.
+portable = []
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

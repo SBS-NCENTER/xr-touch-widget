@@ -42,22 +42,26 @@ jobs:
           releaseBody: 'Windows installer (.exe / .msi), Windows portable (.zip), and macOS (.dmg) builds are attached below.'
           releaseDraft: false
           prerelease: false
-      # Portable Windows build: the SAME compiled exe (no installer) + an empty
-      # `portable.txt` marker, zipped and attached to the Release. The marker
-      # makes the app keep config.toml next to the exe (portable mode), so the
-      # unzipped folder is copy-portable. Windows-only; runs after tauri-action
-      # has created the Release for this tag.
-      - name: Package portable Windows zip
+      # Portable Windows build: a SEPARATE binary compiled with the `portable`
+      # feature (config.toml lives next to the exe — no marker file), zipped and
+      # attached to the Release. Windows-only; runs after tauri-action has
+      # created the Release and built ui/dist for this tag.
+      - name: Build & package portable Windows zip
         if: matrix.platform == 'windows-latest'
         shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ver = "${{ github.ref_name }}".TrimStart('v')
+          npm install -g @tauri-apps/cli
+          # Recompiles the app crate with the portable feature (reusing the
+          # ui/dist tauri-action already built) and renames via mainBinaryName.
+          # Overwrites the installed exe in target/release — fine, the installers
+          # were already bundled by the tauri-action step above.
+          cargo tauri build --no-bundle --features portable
           $staging = "portable/xr-touch-widget"
           New-Item -ItemType Directory -Force -Path $staging | Out-Null
           Copy-Item "target/release/xr-touch-widget.exe" "$staging/"
-          New-Item -ItemType File -Force -Path "$staging/portable.txt" | Out-Null
           $zip = "xr-touch-widget-portable_${ver}_x64.zip"
           Compress-Archive -Path $staging -DestinationPath $zip -Force
           gh release upload ${{ github.ref_name }} $zip --clobber

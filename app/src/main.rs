@@ -8,7 +8,6 @@ use std::sync::{mpsc::Sender, Mutex};
 use tauri::{AppHandle, Emitter, LogicalSize, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use xrt_core::config::{self, Config, LoadOutcome, ValueType};
 use xrt_core::net::OscSocket;
-use xrt_core::paths;
 
 struct AppState {
     config_path: PathBuf,
@@ -141,30 +140,34 @@ fn main() {
             let win = app.get_webview_window("palette").expect("palette window exists");
             apply_glass(&win);
 
-            // Resolve the DATA BASE dir, then place config.toml under it.
-            // PORTABLE mode (a `portable.txt` marker next to the exe) keeps
-            // config in the exe's own folder so the whole folder is
-            // copy-portable; otherwise config lives in the per-user OS config
-            // dir (installed behavior, unchanged). Neither branch panics
-            // (§8 — the app must come up).
-            let installed_dir = match app.path().app_config_dir() {
-                Ok(dir) => dir,
-                Err(e) => {
-                    eprintln!("failed to resolve app config dir, using temp fallback: {e}");
-                    std::env::temp_dir().join("xr-touch-to-osc")
+            // Resolve the DATA BASE dir, then place config.toml under it. The
+            // mode is chosen at COMPILE time: a PORTABLE build
+            // (`--features portable`) keeps config in the exe's own folder so
+            // the whole folder is copy-portable; the default (installed) build
+            // keeps it in the per-user OS config dir. Portable and installed are
+            // separate binaries. Neither branch panics (§8 — the app must come
+            // up); both fall back to a temp dir if their primary lookup fails.
+            let base_dir = if cfg!(feature = "portable") {
+                match std::env::current_exe() {
+                    Ok(exe) => exe
+                        .parent()
+                        .map(|d| d.to_path_buf())
+                        .unwrap_or_else(|| std::env::temp_dir().join("xr-touch-to-osc")),
+                    Err(e) => {
+                        eprintln!("failed to resolve current exe, using temp fallback: {e}");
+                        std::env::temp_dir().join("xr-touch-to-osc")
+                    }
+                }
+            } else {
+                match app.path().app_config_dir() {
+                    Ok(dir) => dir,
+                    Err(e) => {
+                        eprintln!("failed to resolve app config dir, using temp fallback: {e}");
+                        std::env::temp_dir().join("xr-touch-to-osc")
+                    }
                 }
             };
-            let exe_dir = match std::env::current_exe() {
-                Ok(exe) => exe
-                    .parent()
-                    .map(|d| d.to_path_buf())
-                    .unwrap_or_else(|| installed_dir.clone()),
-                Err(e) => {
-                    eprintln!("failed to resolve current exe, portable-mode check skipped: {e}");
-                    installed_dir.clone()
-                }
-            };
-            let config_path = paths::base_dir(&exe_dir, &installed_dir).join("config.toml");
+            let config_path = base_dir.join("config.toml");
             let (config, outcome) = config::load(&config_path);
             let mut load_warning = match outcome {
                 LoadOutcome::Loaded => None,
