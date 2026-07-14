@@ -1,3 +1,11 @@
 [workspace]
 resolver = "2"
 members = ["crates/core", "crates/mock-xr", "app"]
+
+# Smaller, tighter release binary (portable exe + installers). Behavior-neutral:
+# link-time optimization + a single codegen unit + stripped symbols. Startup is
+# webview-bound so the gain there is marginal; the win is binary size.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

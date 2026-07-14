@@ -226,19 +226,26 @@ fn main() {
                 load_warning,
             });
 
-            // Pre-create the settings window (hidden) now, during setup: a
-            // WebView2 window created later at runtime (from the open_settings
-            // command) renders blank on Windows, but one created here paints
-            // correctly. open_settings just show()s this one. Non-fatal on
-            // failure (§8 — the palette must still come up).
-            if let Err(e) = build_settings_window(app.handle()) {
-                eprintln!("failed to pre-create settings window: {e}");
-            }
-
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // Pre-create the hidden settings window AFTER the app is ready, not
+            // during setup(): setup() blocks the palette's first paint, so
+            // building the second webview there delayed startup. Creating it on
+            // the first Ready event lets the palette paint first, then warms the
+            // settings webview in the background. Still created up front (before
+            // any ⚙ tap), so it renders correctly — a settings window created
+            // on-demand from the open_settings command paints blank on Windows.
+            if let tauri::RunEvent::Ready = event {
+                if app_handle.get_webview_window("settings").is_none() {
+                    if let Err(e) = build_settings_window(app_handle) {
+                        eprintln!("failed to pre-create settings window: {e}");
+                    }
+                }
+            }
+        });
 }
 
 /// OS-level behind-window blur (spec §7). CSS cannot blur what is behind
