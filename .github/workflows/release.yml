@@ -54,11 +54,13 @@ jobs:
         run: |
           $ver = "${{ github.ref_name }}".TrimStart('v')
           npm install -g @tauri-apps/cli
-          # Recompiles the app crate with the portable feature (reusing the
-          # ui/dist tauri-action already built) and renames via mainBinaryName.
-          # Overwrites the installed exe in target/release — fine, the installers
-          # were already bundled by the tauri-action step above.
-          cargo tauri build --no-bundle --features portable
+          # Rebuild with the portable feature (standalone tauri-cli, run from the
+          # app dir like the tauri-action step). Reuses the already-built ui/dist,
+          # renames via mainBinaryName, and overwrites the installed exe in
+          # target/release — fine, the installers were already bundled above.
+          Push-Location app
+          tauri build --no-bundle --features portable
+          Pop-Location
           $staging = "portable/xr-touch-widget"
           New-Item -ItemType Directory -Force -Path $staging | Out-Null
           Copy-Item "target/release/xr-touch-widget.exe" "$staging/"

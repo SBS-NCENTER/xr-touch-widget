@@ -1,0 +1,9 @@
+{
+  "name": "xr-touch-widget",
+  "private": true,
+  "description": "Root delegator so `npm run dev|build` works regardless of the directory Tauri runs beforeDev/BuildCommand from. Different tauri-cli versions use different CWDs (local cargo-tauri runs them in ui/, CI's tauri-cli runs them at the repo root), and npm resolves the nearest package.json up the tree: from ui/ it uses ui/package.json directly; from the root or app/ it lands here and delegates to ui via --prefix.",
+  "scripts": {
+    "dev": "npm run dev --prefix ui",
+    "build": "npm run build --prefix ui"
+  }
+}
