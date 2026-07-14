@@ -65,42 +65,66 @@ fn load_warning(state: State<AppState>) -> Option<String> {
     state.load_warning.clone()
 }
 
-#[tauri::command]
-fn open_settings(app: AppHandle) {
-    if let Some(win) = app.get_webview_window("settings") {
-        let _ = win.set_focus();
-        return;
-    }
+/// Build the settings window, created HIDDEN. It is pre-created once during
+/// `setup()` and kept alive for the app's lifetime — `open_settings` only
+/// show()s it. This is deliberate: a WebView2 window created at RUNTIME (from
+/// the `open_settings` command, in response to the ⚙ tap) renders blank/white
+/// on Windows even though it navigates to the correct URL, whereas a window
+/// created during `setup()` paints correctly. So we create it up front and
+/// toggle visibility instead of create/destroy.
+fn build_settings_window(app: &AppHandle) -> tauri::Result<tauri::WebviewWindow> {
     // Transparent window whose rounded OPAQUE grey panel (Settings.svelte
     // .panel) provides the visible surface — the same trick the palette uses.
     // D9's "opaque/readable content" still holds: the panel is solid grey with
     // no blur/translucency. Transparency only lets the window's own corners sit
     // OUTSIDE the panel's rounded edge, so no square opaque backing peeks past
-    // the CSS/objc corner radius (an opaque window showed a sharp corner
-    // sliver). Requires macOSPrivateApi (set in tauri.conf.json).
-    // Opaque on Windows: transparent WebView2 doesn't composite its content on
-    // Win11 (the settings panel rendered blank). Elsewhere (macOS) stay
-    // transparent so the rounded panel's corners fall outside the window edge.
-    let transparent = !cfg!(target_os = "windows");
-    let builder = WebviewWindowBuilder::new(&app, "settings", WebviewUrl::App("settings.html".into()))
+    // the CSS/objc corner radius. Requires macOSPrivateApi (tauri.conf.json).
+    // Transparent on every platform so the rounded opaque panel's corners fall
+    // OUTSIDE the window edge (no square backing peeks past the CSS radius). The
+    // old Windows blank was the runtime-creation bug, not transparency, so
+    // Windows now matches macOS here.
+    let transparent = true;
+    let win = WebviewWindowBuilder::new(app, "settings", WebviewUrl::App("settings.html".into()))
         .title("XRT Settings")
         .inner_size(660.0, 800.0)
         .decorations(false)
         .transparent(transparent)
-        .always_on_top(true);
-    match builder.build() {
-        Ok(win) => {
-            // Clip the contentView to the same 14px radius as the CSS panel so
-            // the transparent window's corners match `border-radius:
-            // var(--radius)` (14px). Composes fine on a transparent window.
-            // macOS-only (the helper is macOS-gated); a no-op elsewhere.
-            #[cfg(target_os = "macos")]
-            round_content_view_corners(&win, 14.0);
-            #[cfg(not(target_os = "macos"))]
-            let _ = win;
-        }
-        Err(e) => eprintln!("failed to open settings window: {e}"),
-    }
+        .always_on_top(true)
+        .visible(false)
+        .build()?;
+    // Clip the contentView to the same 14px radius as the CSS panel so the
+    // transparent window's corners match `border-radius: var(--radius)` (14px).
+    // macOS-only (the helper is macOS-gated); a no-op elsewhere.
+    #[cfg(target_os = "macos")]
+    round_content_view_corners(&win, 14.0);
+    // Windows: round the window via DWM so the opaque settings panel's corners
+    // aren't framed by the square transparent window backing.
+    #[cfg(target_os = "windows")]
+    round_window_corners(&win);
+    Ok(win)
+}
+
+#[tauri::command]
+fn open_settings(app: AppHandle) {
+    // The settings window is pre-created (hidden) in setup(); here we just show
+    // and focus it. Fall back to building it on demand if it somehow doesn't
+    // exist (it always should) so the ⚙ tap is never a dead end.
+    let win = match app.get_webview_window("settings") {
+        Some(win) => win,
+        None => match build_settings_window(&app) {
+            Ok(win) => win,
+            Err(e) => {
+                eprintln!("failed to build settings window: {e}");
+                return;
+            }
+        },
+    };
+    let _ = win.show();
+    let _ = win.set_focus();
+    // Ask the settings UI to reload its draft from the current saved config, so
+    // reopening never shows a stale/discarded edit from a previous session
+    // (the webview persists across hide/show, unlike the old create/close).
+    let _ = app.emit_to("settings", "xrt://settings-shown", ());
 }
 
 fn main() {
@@ -198,6 +222,16 @@ fn main() {
                 engine_tx,
                 load_warning,
             });
+
+            // Pre-create the settings window (hidden) now, during setup: a
+            // WebView2 window created later at runtime (from the open_settings
+            // command) renders blank on Windows, but one created here paints
+            // correctly. open_settings just show()s this one. Non-fatal on
+            // failure (§8 — the palette must still come up).
+            if let Err(e) = build_settings_window(app.handle()) {
+                eprintln!("failed to pre-create settings window: {e}");
+            }
+
             Ok(())
         })
         .run(tauri::generate_context!())
@@ -209,11 +243,21 @@ fn main() {
 fn apply_glass(win: &tauri::WebviewWindow) {
     #[cfg(target_os = "windows")]
     {
-        // Windows uses an OPAQUE window (transparent WebView2 fails to composite
-        // its content on Win11 — palette AND settings rendered blank). Acrylic
-        // requires a transparent window, so it is intentionally NOT applied; the
-        // dark UI comes from CSS solid backgrounds (.platform-windows) instead.
-        let _ = win;
+        // OS-level acrylic behind-blur (spec §7), the Windows counterpart to
+        // macOS vibrancy. The earlier "transparent WebView2 renders blank on
+        // Win11" diagnosis was wrong — that blank was the runtime settings
+        // window (now pre-created in setup, see build_settings_window). With a
+        // transparent window created up front, acrylic composites correctly.
+        // The tint is a low-alpha dark so the configurable CSS --glass-bg
+        // (appearance.bg_opacity) still controls the visible darkness on top.
+        use window_vibrancy::apply_acrylic;
+        if let Err(e) = apply_acrylic(win, Some((18, 22, 28, 120))) {
+            eprintln!("acrylic failed (falling back to plain transparency): {e}");
+        }
+        // Round the whole window (incl. the acrylic backing) so its square
+        // corners don't poke out around the CSS glass panel — the Windows
+        // counterpart to macOS's round_content_view_corners.
+        round_window_corners(win);
     }
     #[cfg(target_os = "macos")]
     {
@@ -243,6 +287,41 @@ fn apply_glass(win: &tauri::WebviewWindow) {
     {
         // Dev fallback: plain transparency, no blur (spec §7).
         let _ = win;
+    }
+}
+
+/// Round a Windows window's corners via DWM (Win11). Clips the whole composited
+/// window — including the acrylic backing — to the OS rounded-corner radius, so
+/// the square window corners don't show around the rounded CSS glass panel.
+/// Auto-tracks size changes (unlike a SetWindowRgn region), so it survives
+/// edit-mode resizes. macOS uses round_content_view_corners for the same goal.
+#[cfg(target_os = "windows")]
+fn round_window_corners(win: &tauri::WebviewWindow) {
+    #[link(name = "dwmapi")]
+    unsafe extern "system" {
+        fn DwmSetWindowAttribute(
+            hwnd: isize,
+            attr: u32,
+            pv: *const core::ffi::c_void,
+            cb: u32,
+        ) -> i32;
+    }
+    // DWMWA_WINDOW_CORNER_PREFERENCE = 33 ; DWMWCP_ROUND = 2 (dwmapi.h).
+    const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+    const DWMWCP_ROUND: u32 = 2;
+    match win.hwnd() {
+        Ok(hwnd) => {
+            let pref = DWMWCP_ROUND;
+            unsafe {
+                DwmSetWindowAttribute(
+                    hwnd.0 as isize,
+                    DWMWA_WINDOW_CORNER_PREFERENCE,
+                    &pref as *const u32 as *const core::ffi::c_void,
+                    core::mem::size_of::<u32>() as u32,
+                );
+            }
+        }
+        Err(e) => eprintln!("failed to get hwnd for corner rounding: {e}"),
     }
 }
 

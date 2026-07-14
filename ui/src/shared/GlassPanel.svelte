@@ -18,16 +18,11 @@
     color: var(--text);
   }
 
-  /* Windows runs an OPAQUE window (transparent WebView2 fails to composite its
-     content on Win11 — the palette rendered blank). Swap the translucent glass
-     for a solid tint filling the whole window: no behind-blur to reveal, no
-     rounded corners exposing the opaque window backing. macOS keeps the glass. */
+  /* Windows: the WINDOW is rounded by DWM (round_window_corners in main.rs), so
+     fill the glass to the window edge — a CSS radius here would leave a
+     two-tone acrylic sliver between the panel's rounder corner and the window
+     edge. macOS keeps the CSS radius (its contentView is clipped to match). */
   :global(html.platform-windows) .glass {
-    background: var(--glass-bg-opaque, #141820);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-    border: none;
     border-radius: 0;
-    box-shadow: none;
   }
 </style>

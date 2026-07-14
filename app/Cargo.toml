@@ -7,10 +7,7 @@ edition = "2024"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# `devtools` temporarily enabled to debug the Windows blank-render issue: it
-# turns on WebView2/WKWebView devtools (right-click → Inspect / F12) in release
-# builds too, so we can read the console on the broadcast PC. Remove once fixed.
-tauri = { version = "2", features = ["macos-private-api", "devtools"] }
+tauri = { version = "2", features = ["macos-private-api"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 xrt-core = { path = "../crates/core" }

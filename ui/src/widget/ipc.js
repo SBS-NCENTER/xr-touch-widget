@@ -143,12 +143,21 @@ export async function quit() {
   return invoke('quit_app');
 }
 
-/** Close the current (settings) window without saving — used by [뒤로가기].
- *  Routed through ipc.js, like every other Tauri window API, to keep the
- *  single-gateway rule intact even though the brief only spelled out
- *  onAppearancePreview/emitAppearancePreview/quit explicitly. */
-export async function closeWindow() {
-  if (!inTauri) return console.log('[mock] closeWindow');
+/** Hide the current (settings) window without saving — used by [뒤로가기].
+ *  The settings window is PERSISTENT (pre-created hidden at startup and only
+ *  ever shown/hidden — a runtime-created WebView2 window renders blank on
+ *  Windows), so [뒤로가기] hides it rather than closing/destroying it. */
+export async function hideWindow() {
+  if (!inTauri) return console.log('[mock] hideWindow');
   const { getCurrentWindow } = await import('@tauri-apps/api/window');
-  return getCurrentWindow().close();
+  return getCurrentWindow().hide();
+}
+
+/** Fires when the settings window is (re-)shown via ⚙ — Settings.svelte uses
+ *  it to reload its draft from the current saved config, since the persistent
+ *  webview isn't remounted on reopen. Returns the unlisten fn. */
+export async function onSettingsShown(cb) {
+  if (!inTauri) return () => {};
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen('xrt://settings-shown', () => cb());
 }

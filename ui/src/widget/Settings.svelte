@@ -6,7 +6,8 @@
     emitAppearancePreview,
     onStatus,
     quit,
-    closeWindow,
+    hideWindow,
+    onSettingsShown,
   } from './ipc.js';
 
   // Draft/preview model (Task 9, D10): `saved` is the config as loaded, never
@@ -36,13 +37,20 @@
   const GRID_MIN = 1;
   const GRID_MAX = 24;
 
+  /** (Re)load saved+draft from the current config. Runs on first mount AND
+   *  every time the persistent settings window is re-shown (⚙), so a reopen
+   *  always starts from the saved config, never a stale/discarded prior edit. */
+  async function loadDraft() {
+    const config = await getConfig();
+    saved = structuredClone(config);
+    draft = structuredClone(config);
+    warning = await loadWarning();
+  }
+
   $effect(() => {
     let unsubs = [];
     (async () => {
-      const config = await getConfig();
-      saved = structuredClone(config);
-      draft = structuredClone(config);
-      warning = await loadWarning();
+      await loadDraft();
       // Mirror the palette's per-target status dots for ACTIVE rows (D13/P3).
       unsubs.push(
         await onStatus((list) => {
@@ -51,6 +59,8 @@
           statusByIp = map;
         }),
       );
+      // Reload the draft whenever the window is re-shown (persistent webview).
+      unsubs.push(await onSettingsShown(() => loadDraft()));
     })();
     return () => unsubs.forEach((u) => u());
   });
@@ -233,7 +243,7 @@
    *  last-saved state, then close. Never persists. */
   async function back() {
     await emitAppearancePreview(previewPayload(saved));
-    await closeWindow();
+    await hideWindow();
   }
 
   async function quitApp() {
@@ -451,9 +461,8 @@
      round_content_view_corners(&win, 14.0) in open_settings. NO border: on a
      transparent window a 1px translucent border reads as a faint edge line
      (esp. along the top), and the solid grey panel needs no outline. */
-  /* Windows: opaque rectangular window (transparent WebView2 can't composite
-     on Win11), so fill it edge-to-edge — no rounded corners to expose the
-     opaque window backing at the 4 corners. macOS keeps the rounded panel. */
+  /* Windows: the window is rounded by DWM (round_window_corners in main.rs);
+     fill the opaque panel to the window edge so no square backing frames it. */
   :global(html.platform-windows) .panel {
     border-radius: 0;
   }

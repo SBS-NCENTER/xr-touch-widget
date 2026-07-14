@@ -117,10 +117,6 @@
     const { r, g, b } = hexToRgb(appearance.bg_tint);
     const root = document.documentElement.style;
     root.setProperty('--glass-bg', `rgba(${r}, ${g}, ${b}, ${appearance.bg_opacity})`);
-    // Fully-opaque variant of the same tint for the Windows opaque window
-    // (transparent WebView2 can't composite on Win11) — used by GlassPanel's
-    // `.platform-windows` rule so the configured color still shows through.
-    root.setProperty('--glass-bg-opaque', `rgb(${r}, ${g}, ${b})`);
     root.setProperty('--accent', appearance.accent);
     root.setProperty('--btn-fill', `rgba(255, 255, 255, ${appearance.button_opacity})`);
     // Last-press underline color+opacity (Task 9 P2), composed the same way as
