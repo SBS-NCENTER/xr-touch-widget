@@ -3,7 +3,8 @@
   import {
     getConfig,
     saveConfig,
-    trigger,
+    press,
+    onPressError,
     openSettings,
     loadWarning,
     onStatus,
@@ -31,6 +32,10 @@
   // button identity is no longer a unique graphic_id, and the {#each} is
   // index-keyed, so the index is the stable per-button handle here.
   let flashIndex = $state(null);
+  // D16: which button INDEX is currently flashing red after a failed action
+  // (xrt://press-error). Runtime-only; a newer failure retargets the flash.
+  let errorIndex = $state(null);
+  let errorTimer = null;
   let editMode = $state(false);
 
   // Button-grid layout (D11) and last-press emphasis (D12) — both driven by
@@ -165,6 +170,15 @@
       unsubs.push(await onStatus((list) => (statuses = list)));
       unsubs.push(await onConfigChanged((config) => applyConfig(config)));
       unsubs.push(await onAppearancePreview((payload) => applyPreview(payload)));
+      // D16: any failed action of a press (OSC or HTTP) flashes that button
+      // red for 1.5s. A newer failure retargets and restarts the flash.
+      unsubs.push(
+        await onPressError((payload) => {
+          errorIndex = payload.button_index;
+          if (errorTimer) clearTimeout(errorTimer);
+          errorTimer = setTimeout(() => (errorIndex = null), 1500);
+        }),
+      );
       // Cancel an armed enter-timer the moment the window actually moves
       // (native drag). This is the ONE case the 8px pointermove guard can't
       // catch, because the OS drag session stops delivering pointermove to
@@ -185,12 +199,13 @@
     return () => unsubs.forEach((u) => u());
   });
 
-  async function press(btn, i) {
+  async function pressButton(i) {
     flashIndex = i;
     lastPressedIndex = i;
     setTimeout(() => (flashIndex = null), 250);
-    // D14: send the button's full OSC message spec (address + typed value).
-    await trigger(btn.address, btn.value_type, btn.value);
+    // D16: send only the index — the engine resolves buttons[i].actions
+    // from the running config and fires them in order.
+    await press(i);
   }
 
   function dotClass(s) {
@@ -418,8 +433,9 @@
           <button
             class="trig"
             class:flash={flashIndex === i}
+            class:press-error={errorIndex === i}
             class:last-pressed={highlightLast && lastPressedIndex === i}
-            onclick={() => press(btn, i)}
+            onclick={() => pressButton(i)}
           >
             <span class="label">{btn.label}</span>
           </button>
@@ -582,6 +598,15 @@
     transition: transform 0.08s ease, background 0.15s ease;
   }
   .trig:active, .trig.flash { background: var(--accent); transform: scale(0.96); }
+  /* D16: press-failure flash — a failed action (OSC send error or HTTP
+     failure) paints the button red for 1.5s, driven by xrt://press-error.
+     Deliberately louder than .flash so a dead camera cut can't be missed
+     mid-broadcast; wins over .flash/.active because it comes later in the
+     cascade at equal specificity. */
+  .trig.press-error {
+    border-color: var(--status-lost);
+    background: rgba(255, 70, 70, 0.35);
+  }
   /* D12: persists until another button is pressed, only when
      appearance.highlight_last is on (class only applied then). Calm,
      persistent emphasis (NOT the press-flash): a heavy weight plus an accent

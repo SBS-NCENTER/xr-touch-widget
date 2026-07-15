@@ -9,13 +9,24 @@ const mockConfig = {
     { name: 'XR-1', ip: '192.168.0.10', active: true },
     { name: 'XR-2', ip: '192.168.0.11', active: false },
   ],
-  // D14: each button is a full OSC message — address + a single typed value.
-  // Mirrors crates/core/src/config.rs ButtonDef so the browser harness/preview
-  // matches production.
+  // D16: each button is an ORDERED action list — osc (D14 message spec) or
+  // http (full URL, GET). Mirrors crates/core/src/config.rs ButtonDef/Action
+  // so the browser harness/preview matches production.
   buttons: [
-    { label: '그래픽 A', address: '/xrt/graphic', value: 'graphic_a', value_type: 'string' },
-    { label: '그래픽 B', address: '/xrt/graphic', value: 'graphic_b', value_type: 'string' },
-    { label: 'CLEAR', address: '/xrt/graphic', value: 'clear_all', value_type: 'string' },
+    {
+      label: 'CAM 1',
+      actions: [
+        { type: 'http', url: 'http://10.10.204.184:16208/gateway/25.2.4/publish?Type=Call&Target=Store&Method=SetCameraSet&ParamNumber=0' },
+      ],
+    },
+    {
+      label: '그래픽 A',
+      actions: [{ type: 'osc', address: '/xrt/graphic', value: 'graphic_a', value_type: 'string' }],
+    },
+    {
+      label: 'CLEAR',
+      actions: [{ type: 'osc', address: '/xrt/graphic', value: 'clear_all', value_type: 'string' }],
+    },
   ],
   // Mirrors crates/core/src/config.rs AppearanceConfig/WindowConfig spec
   // defaults (D8/D9) so the appearance-application code path in
@@ -39,10 +50,19 @@ export async function saveConfig(config) {
   return invoke('save_config', { config });
 }
 
-export async function trigger(address, valueType, value) {
-  if (!inTauri) return console.log('[mock] trigger', address, valueType, value);
+export async function press(index) {
+  if (!inTauri) return console.log('[mock] press', index);
   const { invoke } = await import('@tauri-apps/api/core');
-  return invoke('trigger', { address, valueType, value });
+  return invoke('press', { index });
+}
+
+/** cb receives {button_index, detail} when any action of a press fails
+ *  (OSC send error or HTTP failure) — returns unlisten fn. Drives the
+ *  palette's 1.5s red flash (D16). */
+export async function onPressError(cb) {
+  if (!inTauri) return () => {};
+  const { listen } = await import('@tauri-apps/api/event');
+  return listen('xrt://press-error', (e) => cb(e.payload));
 }
 
 export async function openSettings() {
