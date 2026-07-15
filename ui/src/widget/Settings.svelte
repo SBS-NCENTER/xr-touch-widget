@@ -125,8 +125,8 @@
     draft.targets.splice(i, 1);
   }
   function addButton() {
-    // D14: a full OSC message. Same defaults as ButtonDef in config.rs.
-    draft.buttons.push({ label: '', address: '/xrt/graphic', value: '', value_type: 'string' });
+    // D16: a new button starts with ONE empty URL action — "URL 우선".
+    draft.buttons.push({ label: '', actions: [{ type: 'http', url: '' }] });
   }
   function removeButton(i) {
     draft.buttons.splice(i, 1);
@@ -135,6 +135,22 @@
     const j = i + delta;
     if (j < 0 || j >= draft.buttons.length) return;
     [draft.buttons[i], draft.buttons[j]] = [draft.buttons[j], draft.buttons[i]];
+  }
+  function addAction(b) {
+    // New actions default to http too (D16 "URL 우선").
+    b.actions.push({ type: 'http', url: '' });
+  }
+  function removeAction(b, j) {
+    b.actions.splice(j, 1);
+  }
+  /** Swap an action's type IN PLACE, resetting to that type's defaults —
+   *  the two shapes share no fields, so nothing meaningful carries across. */
+  function setActionType(b, j, type) {
+    if (b.actions[j].type === type) return;
+    b.actions[j] =
+      type === 'http'
+        ? { type: 'http', url: '' }
+        : { type: 'osc', address: '/xrt/graphic', value: '', value_type: 'string' };
   }
 
   const I32_MIN = -2147483648;
@@ -165,39 +181,54 @@
     return true;
   }
 
-  /** Inline feedback: true when a button's value doesn't parse for its current
-   *  value_type, so the value widget can flag itself red BEFORE [적용]. Re-runs
-   *  reactively whenever b.value or b.value_type changes (incl. a type switch). */
-  function valueInvalid(b) {
-    return !valueParses(b.value_type, b.value);
+  /** Inline feedback: true when an osc action's value doesn't parse for its
+   *  current value_type, so the value widget can flag itself red BEFORE
+   *  [적용]. Re-runs reactively whenever a.value or a.value_type changes. */
+  function valueInvalid(a) {
+    return !valueParses(a.value_type, a.value);
   }
 
-  /** Validate the button list before it can be saved (D14). Returns a Korean
-   *  error message for the FIRST invalid button, or null if all are OK. Mirrors
-   *  the Rust send path (osc::arg_for) + the OSC address rule so an invalid
-   *  message can never reach the on-air trigger path. */
+  /** Inline feedback for http actions: red until the URL is a plausible
+   *  http(s) URL — same rule the apply-time validator enforces. */
+  function urlInvalid(a) {
+    const url = (a.url ?? '').trim();
+    return url === '' || !/^https?:\/\//.test(url);
+  }
+
+  /** Validate the button list before it can be saved (D14 rules per osc
+   *  action + D16 structure rules). Returns a Korean error message for the
+   *  FIRST invalid entry, or null if all are OK. `actions ≥ 1` is the
+   *  migration-safety invariant (an empty list in a saved config would read
+   *  as the legacy shape on the Rust side — spec §4.2). */
   function validateButtons(buttons) {
     for (let i = 0; i < buttons.length; i++) {
       const b = buttons[i];
       const n = i + 1;
-      const address = b.address ?? '';
-      // Address: non-empty, starts with '/', no whitespace anywhere (OSC rule).
-      // The empty case is the "clearly-incomplete button" guard (was graphic_id).
-      if (address.trim() === '') return `버튼 ${n}: 주소(address)를 입력하세요`;
-      if (!address.startsWith('/')) return `버튼 ${n}: 주소는 '/'로 시작해야 합니다`;
-      if (/\s/.test(address)) return `버튼 ${n}: 주소에 공백이 있으면 안 됩니다`;
-      // /xrt/ping and /xrt/pong are the app's fixed heartbeat protocol. A
-      // button aimed at either would make a real UE reply pong, briefly reading
-      // as a false "connected" on the heartbeat, so they are reserved.
-      const trimmedAddr = address.trim();
-      if (trimmedAddr === '/xrt/ping' || trimmedAddr === '/xrt/pong')
-        return `버튼 ${n}: /xrt/ping 과 /xrt/pong 은 heartbeat 전용 주소라 사용할 수 없습니다`;
-      // Typed value must parse for int/float/bool; string/none skip this
-      // (same rule as the inline .invalid feedback, via valueParses).
-      if (!valueParses(b.value_type, b.value)) {
-        if (b.value_type === 'int') return `버튼 ${n}: 정수(int) 값이 올바르지 않습니다`;
-        if (b.value_type === 'float') return `버튼 ${n}: 실수(float) 값이 올바르지 않습니다`;
-        if (b.value_type === 'bool') return `버튼 ${n}: 불린(bool) 값은 true / false 여야 합니다`;
+      if (!b.actions || b.actions.length === 0)
+        return `버튼 ${n}: 액션이 최소 1개 필요합니다`;
+      for (let j = 0; j < b.actions.length; j++) {
+        const a = b.actions[j];
+        const m = j + 1;
+        if (a.type === 'http') {
+          const url = (a.url ?? '').trim();
+          if (url === '') return `버튼 ${n} 액션 ${m}: URL을 입력하세요`;
+          if (!/^https?:\/\//.test(url))
+            return `버튼 ${n} 액션 ${m}: URL은 http:// 또는 https:// 로 시작해야 합니다`;
+          continue;
+        }
+        // osc action — the D14 rules, per action.
+        const address = a.address ?? '';
+        if (address.trim() === '') return `버튼 ${n} 액션 ${m}: 주소(address)를 입력하세요`;
+        if (!address.startsWith('/')) return `버튼 ${n} 액션 ${m}: 주소는 '/'로 시작해야 합니다`;
+        if (/\s/.test(address)) return `버튼 ${n} 액션 ${m}: 주소에 공백이 있으면 안 됩니다`;
+        const trimmedAddr = address.trim();
+        if (trimmedAddr === '/xrt/ping' || trimmedAddr === '/xrt/pong')
+          return `버튼 ${n} 액션 ${m}: /xrt/ping 과 /xrt/pong 은 heartbeat 전용 주소라 사용할 수 없습니다`;
+        if (!valueParses(a.value_type, a.value)) {
+          if (a.value_type === 'int') return `버튼 ${n} 액션 ${m}: 정수(int) 값이 올바르지 않습니다`;
+          if (a.value_type === 'float') return `버튼 ${n} 액션 ${m}: 실수(float) 값이 올바르지 않습니다`;
+          if (a.value_type === 'bool') return `버튼 ${n} 액션 ${m}: 불린(bool) 값은 true / false 여야 합니다`;
+        }
       }
     }
     return null;
@@ -285,67 +316,87 @@
       {/each}
       <button class="add" onclick={addTarget}>+ 장비 추가</button>
 
-      <h2>버튼 (OSC 메시지)</h2>
+      <h2>버튼</h2>
       {#each draft.buttons as b, i}
-        <div class="grid-row">
-          <input class="col-label" placeholder="라벨" bind:value={b.label} />
-          <input class="col-address" placeholder="주소 (예: /xrt/graphic)" bind:value={b.address} />
-          <!-- Value widget adapts to value_type (Fix 1), but the value is ALWAYS
-               stored as a String: the number inputs bind one-way (value= +
-               oninput) so Svelte never coerces b.value to a number, while the
-               text input and the bool <select> bind the string directly. `none`
-               is disabled (no value is sent). `.invalid` flags a value that
-               won't parse for its type, live, before [적용]. -->
-          {#if b.value_type === 'bool'}
-            <select class="col-value" class:invalid={valueInvalid(b)} bind:value={b.value}>
-              <option value="true">true</option>
-              <option value="false">false</option>
-            </select>
-          {:else if b.value_type === 'none'}
-            <input class="col-value" type="text" placeholder="(값 없음)" disabled />
-          {:else if b.value_type === 'int'}
-            <input
-              class="col-value"
-              class:invalid={valueInvalid(b)}
-              type="number"
-              step="1"
-              inputmode="numeric"
-              placeholder="값"
-              value={b.value}
-              oninput={(e) => (b.value = e.currentTarget.value)}
-            />
-          {:else if b.value_type === 'float'}
-            <input
-              class="col-value"
-              class:invalid={valueInvalid(b)}
-              type="number"
-              step="any"
-              inputmode="decimal"
-              placeholder="값"
-              value={b.value}
-              oninput={(e) => (b.value = e.currentTarget.value)}
-            />
-          {:else}
-            <input
-              class="col-value"
-              type="text"
-              placeholder="값"
-              value={b.value}
-              oninput={(e) => (b.value = e.currentTarget.value)}
-            />
-          {/if}
-          <select class="col-type" bind:value={b.value_type}>
-            <option value="none">none</option>
-            <option value="string">string</option>
-            <option value="int">int</option>
-            <option value="float">float</option>
-            <option value="bool">bool</option>
-          </select>
-          <span class="order">
-            <button onclick={() => moveButton(i, -1)}>▲</button>
-            <button onclick={() => moveButton(i, 1)}>▼</button>
-          </span>
-          <button class="del" onclick={() => removeButton(i)}>✕</button>
+        <div class="button-block">
+          <div class="grid-row">
+            <input class="col-label" placeholder="라벨" bind:value={b.label} />
+            <span class="order">
+              <button onclick={() => moveButton(i, -1)}>▲</button>
+              <button onclick={() => moveButton(i, 1)}>▼</button>
+            </span>
+            <button class="del" onclick={() => removeButton(i)}>✕</button>
+          </div>
+          {#each b.actions as a, j}
+            <div class="grid-row action-row">
+              <select
+                class="col-atype"
+                value={a.type}
+                onchange={(e) => setActionType(b, j, e.currentTarget.value)}
+              >
+                <option value="http">URL 호출</option>
+                <option value="osc">OSC 메시지</option>
+              </select>
+              {#if a.type === 'http'}
+                <input
+                  class="col-url"
+                  class:invalid={urlInvalid(a)}
+                  type="text"
+                  placeholder="http://10.10.204.184:16208/gateway/25.2.4/publish?…"
+                  bind:value={a.url}
+                />
+              {:else}
+                <input class="col-address" placeholder="주소 (예: /xrt/graphic)" bind:value={a.address} />
+                {#if a.value_type === 'bool'}
+                  <select class="col-value" class:invalid={valueInvalid(a)} bind:value={a.value}>
+                    <option value="true">true</option>
+                    <option value="false">false</option>
+                  </select>
+                {:else if a.value_type === 'none'}
+                  <input class="col-value" type="text" placeholder="(값 없음)" disabled />
+                {:else if a.value_type === 'int'}
+                  <input
+                    class="col-value"
+                    class:invalid={valueInvalid(a)}
+                    type="number"
+                    step="1"
+                    inputmode="numeric"
+                    placeholder="값"
+                    value={a.value}
+                    oninput={(e) => (a.value = e.currentTarget.value)}
+                  />
+                {:else if a.value_type === 'float'}
+                  <input
+                    class="col-value"
+                    class:invalid={valueInvalid(a)}
+                    type="number"
+                    step="any"
+                    inputmode="decimal"
+                    placeholder="값"
+                    value={a.value}
+                    oninput={(e) => (a.value = e.currentTarget.value)}
+                  />
+                {:else}
+                  <input
+                    class="col-value"
+                    type="text"
+                    placeholder="값"
+                    value={a.value}
+                    oninput={(e) => (a.value = e.currentTarget.value)}
+                  />
+                {/if}
+                <select class="col-type" bind:value={a.value_type}>
+                  <option value="none">none</option>
+                  <option value="string">string</option>
+                  <option value="int">int</option>
+                  <option value="float">float</option>
+                  <option value="bool">bool</option>
+                </select>
+              {/if}
+              <button class="del" onclick={() => removeAction(b, j)}>✕</button>
+            </div>
+          {/each}
+          <button class="add add-action" onclick={() => addAction(b)}>+ 액션 추가</button>
         </div>
       {/each}
       <button class="add" onclick={addButton}>+ 버튼 추가</button>
@@ -592,6 +643,21 @@
   .grid-row .col-label { flex: 0.8; min-width: 0; }
   .grid-row .col-address { flex: 2.2; min-width: 0; }
   .grid-row .col-value { flex: 1.5; min-width: 0; }
+  /* D16: one bordered block per button (label row + its action rows), so
+     multi-action buttons read as one unit in the list. */
+  .button-block {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+    border: 1px solid var(--glass-border);
+    border-radius: 10px;
+  }
+  /* Action rows sit indented under the button's label row. */
+  .action-row { margin-left: 12px; }
+  .grid-row .col-atype { flex: none; width: 116px; }
+  .grid-row .col-url { flex: 3; min-width: 0; }
+  .add-action { margin-left: 12px; min-height: 32px; font-size: 12px; align-self: flex-start; }
   /* Dark-themed selects (Fix 3): the value_type dropdown AND the bool value
      dropdown match the text inputs. appearance:none drops the native macOS
      control; a data-URI chevron replaces the arrow it removes, so the selects
@@ -632,7 +698,7 @@
   /* Inline invalid feedback (Fix 1): red border the moment a value doesn't
      parse for its type — on both the int/float number inputs and the bool
      select. Higher specificity than the base input/select border. */
-  .col-value.invalid { border-color: var(--status-lost); }
+  .col-value.invalid, .col-url.invalid { border-color: var(--status-lost); }
   /* `none` value field: disabled + muted (no value is sent for none). */
   .col-value:disabled { opacity: 0.5; cursor: not-allowed; }
   .chk { display: flex; align-items: center; gap: 4px; color: var(--text); font-size: 13px; }
