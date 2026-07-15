@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::{mpsc::Sender, Mutex};
 
 use tauri::{AppHandle, Emitter, LogicalSize, Manager, State, WebviewUrl, WebviewWindowBuilder};
-use xrt_core::config::{self, Config, LoadOutcome, ValueType};
+use xrt_core::config::{self, Config, LoadOutcome};
 use xrt_core::net::OscSocket;
 
 struct AppState {
@@ -42,21 +42,11 @@ fn quit_app(app: AppHandle) {
 }
 
 #[tauri::command]
-fn trigger(state: State<AppState>, address: String, value_type: String, value: String) {
-    // Map the JS value_type string → ValueType. Unknown/empty falls back to
-    // String (the safe default): a String arg is always encodable, so a
-    // malformed type tag never blocks the on-air press — it just sends the raw
-    // value as a string rather than panicking or dropping the trigger.
-    let value_type = match value_type.as_str() {
-        "none" => ValueType::None,
-        "int" => ValueType::Int,
-        "float" => ValueType::Float,
-        "bool" => ValueType::Bool,
-        _ => ValueType::String,
-    };
-    let _ = state
-        .engine_tx
-        .send(engine::EngineCmd::Trigger { address, value_type, value });
+fn press(state: State<AppState>, index: usize) {
+    // D16: the UI sends only the button INDEX; the engine resolves the
+    // action list from its own (running) config, so a press can never fire
+    // a stale action list from the UI's copy.
+    let _ = state.engine_tx.send(engine::EngineCmd::Press { index });
 }
 
 #[tauri::command]
@@ -131,7 +121,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             get_config,
             save_config,
-            trigger,
+            press,
             load_warning,
             open_settings,
             quit_app

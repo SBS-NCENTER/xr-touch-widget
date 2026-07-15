@@ -3,20 +3,20 @@ use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
-use xrt_core::config::{Config, Target, ValueType};
+use xrt_core::config::{Action, Config, Target};
 use xrt_core::heartbeat::{Heartbeat, LinkStatus};
+use xrt_core::http;
 use xrt_core::net::OscSocket;
 use xrt_core::osc::Incoming;
 
 pub enum EngineCmd {
-    /// One trigger press (D14): the full OSC message spec — arbitrary address
-    /// plus a single typed value. The engine hands it straight to
-    /// send_trigger, which encodes once and filters to active targets.
-    Trigger {
-        address: String,
-        value_type: ValueType,
-        value: String,
-    },
+    /// One button press (D16). The engine resolves `buttons[index]` from ITS
+    /// copy of the config — the running truth — so a press can never fire a
+    /// stale action list from the UI's copy. Actions fire in list order:
+    /// Osc inline (UDP is effectively instant), Http on a spawned thread so
+    /// a dead gateway's timeout can never stall this loop (heartbeat
+    /// included). Responses are NOT awaited between actions.
+    Press { index: usize },
     UpdateConfig(Config),
 }
 
@@ -30,6 +30,20 @@ pub struct StatusEntry {
 
 pub const STATUS_EVENT: &str = "xrt://status";
 
+/// Per-press failure feed for the palette's red flash (D16). Emitted for
+/// EVERY failed action of a press — OSC send errors and HTTP failures alike.
+pub const PRESS_ERROR_EVENT: &str = "xrt://press-error";
+
+/// How long an HTTP action waits (connect + response) before reporting
+/// failure. Constant by design (YAGNI — spec §5).
+const HTTP_TIMEOUT: Duration = Duration::from_secs(3);
+
+#[derive(Serialize, Clone)]
+pub struct PressError {
+    pub button_index: usize,
+    pub detail: String,
+}
+
 /// Owns the socket and all timing. UI talks to it via EngineCmd only.
 pub fn spawn(app: AppHandle, mut config: Config, socket: OscSocket) -> Sender<EngineCmd> {
     let (tx, rx): (Sender<EngineCmd>, Receiver<EngineCmd>) = mpsc::channel();
@@ -39,20 +53,62 @@ pub fn spawn(app: AppHandle, mut config: Config, socket: OscSocket) -> Sender<En
         loop {
             // 1) handle a pending command (50ms poll keeps loop responsive)
             match rx.recv_timeout(Duration::from_millis(50)) {
-                Ok(EngineCmd::Trigger { address, value_type, value }) => {
-                    for report in socket.send_trigger(
-                        &address,
-                        value_type,
-                        &value,
-                        &config.targets,
-                        config.network.ue_port,
-                    ) {
-                        if !report.ok {
-                            let ip = &report.ip;
-                            let e = report.error.as_deref().unwrap_or("unknown error");
-                            eprintln!("OSC send to {ip} failed: {e}");
-                            hb.mark_lost(&report.ip);
+                Ok(EngineCmd::Press { index }) => {
+                    if let Some(btn) = config.buttons.get(index) {
+                        for action in btn.actions.clone() {
+                            match action {
+                                Action::Osc { address, value_type, value } => {
+                                    for report in socket.send_trigger(
+                                        &address,
+                                        value_type,
+                                        &value,
+                                        &config.targets,
+                                        config.network.ue_port,
+                                    ) {
+                                        if !report.ok {
+                                            let ip = &report.ip;
+                                            let e = report.error.as_deref().unwrap_or("unknown error");
+                                            eprintln!("OSC send to {ip} failed: {e}");
+                                            hb.mark_lost(&report.ip);
+                                            // D16: a failed send now also flashes
+                                            // the pressed button red, not just logs.
+                                            let _ = app.emit(
+                                                PRESS_ERROR_EVENT,
+                                                &PressError {
+                                                    button_index: index,
+                                                    detail: format!("OSC → {ip}: {e}"),
+                                                },
+                                            );
+                                        }
+                                    }
+                                }
+                                Action::Http { url } => {
+                                    // Fire on a fresh thread: blocking here would
+                                    // stall heartbeat + subsequent presses for up
+                                    // to HTTP_TIMEOUT per dead gateway. Presses
+                                    // are operator-paced, so thread cost is nil.
+                                    let app = app.clone();
+                                    std::thread::spawn(move || {
+                                        if let Err(e) = http::get(&url, HTTP_TIMEOUT) {
+                                            eprintln!("HTTP GET {url} failed: {e}");
+                                            let _ = app.emit(
+                                                PRESS_ERROR_EVENT,
+                                                &PressError {
+                                                    button_index: index,
+                                                    detail: format!("HTTP: {e}"),
+                                                },
+                                            );
+                                        }
+                                    });
+                                }
+                            }
                         }
+                    } else {
+                        // Stale UI (button list changed mid-press) — drop it.
+                        eprintln!(
+                            "press: button index {index} out of range ({} buttons)",
+                            config.buttons.len()
+                        );
                     }
                 }
                 Ok(EngineCmd::UpdateConfig(new_config)) => {
