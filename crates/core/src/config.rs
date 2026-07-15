@@ -54,22 +54,79 @@ pub enum ValueType {
     Bool,
 }
 
-/// One trigger button (D14, 2026-07-08). A press sends ONE OSC message:
-/// `address` + a single typed argument built from (`value_type`, `value`),
-/// or no argument when `value_type` is `None`. Every field is
-/// `#[serde(default)]` so a partial `[[buttons]]` entry (or a pre-D14
-/// config that still carries the removed `graphic_id`/`type` keys, which are
-/// now simply unknown fields and ignored) loads cleanly with these defaults.
+/// One action a trigger button fires (D16, 2026-07-15). `Osc` is the D14
+/// message spec (address + a single typed value); `Http` is a full URL hit
+/// with GET (Pixotope Gateway-style control — the operator pastes the same
+/// URL a browser would use). Internally tagged, so a config.toml entry reads
+/// `type = "http"` + its fields, and the JS side sees `{ type: "http", url }`
+/// — one shape everywhere.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum Action {
+    Osc {
+        #[serde(default = "default_address")]
+        address: String,
+        #[serde(default)]
+        value_type: ValueType,
+        #[serde(default)]
+        value: String,
+    },
+    Http {
+        #[serde(default)]
+        url: String,
+    },
+}
+
+/// One trigger button (D16, 2026-07-15): a label + an ORDERED list of
+/// actions fired per press (dispatch order — responses are not awaited).
+/// Deserialization goes through `ButtonDefCompat` (serde(from)), so a
+/// pre-D16 config.toml — flat `address`/`value`/`value_type` on the button —
+/// still loads: the flat fields fold into a single Osc action. `save()`
+/// always writes the new shape only. After ANY deserialization `actions` is
+/// non-empty (the settings UI enforces ≥1 action, and empty/absent lists
+/// fold to the default OSC action — the pre-D16 behavior of a bare button).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(from = "ButtonDefCompat")]
 pub struct ButtonDef {
-    #[serde(default)]
     pub label: String,
+    pub actions: Vec<Action>,
+}
+
+/// Accepts BOTH button shapes on load (D16): the new `actions` list and the
+/// pre-D16 flat OSC fields (with their D14 per-field defaults). Unknown
+/// legacy keys (pre-D14 `graphic_id`/`type`) stay ignored as before — no
+/// deny_unknown_fields. Never serialized; `ButtonDef` serializes itself.
+#[derive(Deserialize)]
+struct ButtonDefCompat {
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    actions: Vec<Action>,
     #[serde(default = "default_address")]
-    pub address: String,
+    address: String,
     #[serde(default)]
-    pub value: String,
+    value: String,
     #[serde(default)]
-    pub value_type: ValueType,
+    value_type: ValueType,
+}
+
+impl From<ButtonDefCompat> for ButtonDef {
+    fn from(c: ButtonDefCompat) -> Self {
+        // An empty/absent actions list marks a pre-D16 (or hand-emptied)
+        // button: fold the flat fields into a single Osc action, preserving
+        // pre-D16 behavior exactly (a label-only button still fires the
+        // default /xrt/graphic message).
+        let actions = if c.actions.is_empty() {
+            vec![Action::Osc {
+                address: c.address,
+                value_type: c.value_type,
+                value: c.value,
+            }]
+        } else {
+            c.actions
+        };
+        ButtonDef { label: c.label, actions }
+    }
 }
 
 fn default_address() -> String {
@@ -226,9 +283,11 @@ mod tests {
         });
         c.buttons.push(ButtonDef {
             label: "그래픽 A".into(),
-            address: "/xrt/graphic".into(),
-            value: "lower_third_a".into(),
-            value_type: ValueType::String,
+            actions: vec![Action::Osc {
+                address: "/xrt/graphic".into(),
+                value_type: ValueType::String,
+                value: "lower_third_a".into(),
+            }],
         });
         c.appearance = AppearanceConfig {
             bg_opacity: 0.4,
@@ -247,6 +306,170 @@ mod tests {
         let (loaded, outcome) = load(&path);
         assert_eq!(loaded, c);
         assert!(matches!(outcome, LoadOutcome::Loaded));
+    }
+
+    // --- D16: buttons carry an ordered action list (osc | http) ---
+
+    #[test]
+    fn mixed_actions_roundtrip_with_url_verbatim() {
+        // One button, TWO actions (http first — "URL 우선"), through
+        // save→load. The Pixotope-style URL must survive byte-for-byte
+        // (query string included).
+        let url = "http://10.10.204.184:16208/gateway/25.2.4/publish?Type=Call&Target=Store&Method=SetCameraSet&ParamNumber=0";
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut c = Config::default();
+        c.buttons.push(ButtonDef {
+            label: "CAM 1".into(),
+            actions: vec![
+                Action::Http { url: url.into() },
+                Action::Osc {
+                    address: "/xrt/graphic".into(),
+                    value_type: ValueType::String,
+                    value: "cam1_lower".into(),
+                },
+            ],
+        });
+        save(&path, &c).unwrap();
+        let (loaded, outcome) = load(&path);
+        assert_eq!(loaded, c);
+        assert_eq!(
+            loaded.buttons[0].actions[0],
+            Action::Http { url: url.into() }
+        );
+        assert!(matches!(outcome, LoadOutcome::Loaded));
+    }
+
+    #[test]
+    fn legacy_flat_button_migrates_to_single_osc_action() {
+        // A pre-D16 config.toml: flat OSC fields directly on the button.
+        let toml_str = r#"
+            [[buttons]]
+            label = "A"
+            address = "/xrt/graphic"
+            value = "graphic_a"
+            value_type = "string"
+        "#;
+        let c: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(c.buttons[0].label, "A");
+        assert_eq!(
+            c.buttons[0].actions,
+            vec![Action::Osc {
+                address: "/xrt/graphic".into(),
+                value_type: ValueType::String,
+                value: "graphic_a".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn label_only_button_migrates_to_default_osc_action() {
+        // Pre-D16 semantics preserved: a label-only [[buttons]] entry fired
+        // the default /xrt/graphic message — after migration it still does.
+        let toml_str = r#"
+            [[buttons]]
+            label = "A"
+        "#;
+        let c: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(c.buttons[0].label, "A");
+        assert_eq!(
+            c.buttons[0].actions,
+            vec![Action::Osc {
+                address: "/xrt/graphic".into(),
+                value_type: ValueType::String,
+                value: "".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn legacy_button_keys_are_ignored_and_new_fields_default() {
+        // A pre-D14 config.toml carried `graphic_id` + `type`. Those are now
+        // unknown fields — the compat shape has NO deny_unknown_fields, so
+        // serde silently ignores them and the flat-field migration still
+        // produces the default OSC action.
+        let toml_str = r#"
+            [[buttons]]
+            label = "A"
+            graphic_id = "a"
+            type = "trigger"
+        "#;
+        let c: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(c.buttons[0].label, "A");
+        assert_eq!(
+            c.buttons[0].actions,
+            vec![Action::Osc {
+                address: "/xrt/graphic".into(),
+                value_type: ValueType::String,
+                value: "".into(),
+            }]
+        );
+    }
+
+    #[test]
+    fn explicitly_empty_actions_folds_to_default_osc() {
+        // `actions = []` (hand-edited TOML — the settings UI never saves
+        // this, it enforces ≥1 action) is indistinguishable from "absent"
+        // and folds to the default OSC action the same way. Documents the
+        // spec §4.2 edge explicitly.
+        let toml_str = r#"
+            [[buttons]]
+            label = "A"
+            actions = []
+        "#;
+        let c: Config = toml::from_str(toml_str).unwrap();
+        assert_eq!(c.buttons[0].actions.len(), 1);
+    }
+
+    #[test]
+    fn saved_button_toml_has_no_legacy_flat_keys() {
+        // save() must write the NEW shape only: no flat address/value/
+        // value_type keys left at the button level (they live inside
+        // [[buttons.actions]] entries now).
+        let mut c = Config::default();
+        c.buttons.push(ButtonDef {
+            label: "A".into(),
+            actions: vec![Action::Osc {
+                address: "/a".into(),
+                value_type: ValueType::Int,
+                value: "1".into(),
+            }],
+        });
+        let text = toml::to_string_pretty(&c).unwrap();
+        let value: toml::Value = toml::from_str(&text).unwrap();
+        let button = &value["buttons"][0];
+        assert!(button.get("label").is_some());
+        assert!(button.get("actions").is_some());
+        assert!(button.get("address").is_none());
+        assert!(button.get("value").is_none());
+        assert!(button.get("value_type").is_none());
+    }
+
+    #[test]
+    fn button_value_type_roundtrips_each_variant() {
+        for vt in [
+            ValueType::None,
+            ValueType::String,
+            ValueType::Int,
+            ValueType::Float,
+            ValueType::Bool,
+        ] {
+            let mut c = Config::default();
+            c.buttons.push(ButtonDef {
+                label: "L".into(),
+                actions: vec![Action::Osc {
+                    address: "/a/b".into(),
+                    value_type: vt.clone(),
+                    value: "1".into(),
+                }],
+            });
+            let text = toml::to_string_pretty(&c).unwrap();
+            let back: Config = toml::from_str(&text).unwrap();
+            assert_eq!(
+                back.buttons[0].actions[0],
+                c.buttons[0].actions[0]
+            );
+        }
     }
 
     #[test]
@@ -316,60 +539,6 @@ mod tests {
         let (c, outcome) = load(&path);
         assert_eq!(c, Config::default());
         assert!(matches!(outcome, LoadOutcome::ParseErrorUsedDefault(_)));
-    }
-
-    #[test]
-    fn button_fields_default_when_absent() {
-        // A partial [[buttons]] entry gets the D14 per-field defaults.
-        let toml_str = r#"
-            [[buttons]]
-            label = "A"
-        "#;
-        let c: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(c.buttons[0].label, "A");
-        assert_eq!(c.buttons[0].address, "/xrt/graphic");
-        assert_eq!(c.buttons[0].value, "");
-        assert_eq!(c.buttons[0].value_type, ValueType::String);
-    }
-
-    #[test]
-    fn legacy_button_keys_are_ignored_and_new_fields_default() {
-        // A pre-D14 config.toml carried `graphic_id` + `type`. Those are now
-        // unknown fields — ButtonDef has NO deny_unknown_fields, so serde
-        // silently ignores them and fills the new fields with their defaults.
-        let toml_str = r#"
-            [[buttons]]
-            label = "A"
-            graphic_id = "a"
-            type = "trigger"
-        "#;
-        let c: Config = toml::from_str(toml_str).unwrap();
-        assert_eq!(c.buttons[0].label, "A");
-        assert_eq!(c.buttons[0].address, "/xrt/graphic");
-        assert_eq!(c.buttons[0].value, "");
-        assert_eq!(c.buttons[0].value_type, ValueType::String);
-    }
-
-    #[test]
-    fn button_value_type_roundtrips_each_variant() {
-        for vt in [
-            ValueType::None,
-            ValueType::String,
-            ValueType::Int,
-            ValueType::Float,
-            ValueType::Bool,
-        ] {
-            let mut c = Config::default();
-            c.buttons.push(ButtonDef {
-                label: "L".into(),
-                address: "/a/b".into(),
-                value: "1".into(),
-                value_type: vt.clone(),
-            });
-            let text = toml::to_string_pretty(&c).unwrap();
-            let back: Config = toml::from_str(&text).unwrap();
-            assert_eq!(back.buttons[0].value_type, vt);
-        }
     }
 
     // --- Task 8b (D11/D12): [layout] section + appearance.highlight_last ---
