@@ -189,10 +189,13 @@
   }
 
   /** Inline feedback for http actions: red until the URL is a plausible
-   *  http(s) URL — same rule the apply-time validator enforces. */
+   *  plain-http URL — same rule the apply-time validator enforces. https is
+   *  rejected too: the runtime HTTP client ships WITHOUT a TLS stack (ureq
+   *  default-features=false), so an https URL would always fail at press
+   *  time with no visible reason. Allow it again when the tls feature lands. */
   function urlInvalid(a) {
     const url = (a.url ?? '').trim();
-    return url === '' || !/^https?:\/\//.test(url);
+    return url === '' || !/^http:\/\//.test(url);
   }
 
   /** Validate the button list before it can be saved (D14 rules per osc
@@ -212,8 +215,14 @@
         if (a.type === 'http') {
           const url = (a.url ?? '').trim();
           if (url === '') return `버튼 ${n} 액션 ${m}: URL을 입력하세요`;
-          if (!/^https?:\/\//.test(url))
-            return `버튼 ${n} 액션 ${m}: URL은 http:// 또는 https:// 로 시작해야 합니다`;
+          // http:// only — the runtime client has no TLS stack (ureq
+          // default-features=false), so https would always fail at press
+          // time with no visible reason. Distinct message for https so the
+          // operator learns WHY, not just "invalid".
+          if (/^https:\/\//.test(url))
+            return `버튼 ${n} 액션 ${m}: https는 아직 지원되지 않습니다 (http:// 만 가능)`;
+          if (!/^http:\/\//.test(url))
+            return `버튼 ${n} 액션 ${m}: URL은 http:// 로 시작해야 합니다`;
           continue;
         }
         // osc action — the D14 rules, per action.
