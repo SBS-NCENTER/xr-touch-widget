@@ -146,11 +146,11 @@ route around them.
 ## Host notes
 
 - `chunbay-x86`: the sessions' host. The worktrees are
-  `~/workspaces/SBS/XR-Touch_to_OSC` (the primary, on `production`),
-  `XR-Touch_to_OSC-seat`, `XR-Touch_to_OSC-lane-a` and `XR-Touch_to_OSC-lane-b` beside it; the
-  session root is `~/workspaces/SBS/draft/XR-Touch_to_OSC` and the memory store
-  `~/obsidian-vault/SBS/.claude/memory/XR-Touch_to_OSC/`, both named in each
-  worktree's `.claude/settings.local.json` (chun-harness
+  `~/workspaces/SBS/XR-Touch_to_OSC/production` (the primary, on
+  `production`), `seat`, `lane-a` and `lane-b` beside it in that folder; the
+  session root is `~/workspaces/SBS/XR-Touch_to_OSC/draft` and the memory
+  store `~/obsidian-vault/SBS/.claude/memory/XR-Touch_to_OSC/`, both named in
+  each worktree's `.claude/settings.local.json` (chun-harness
   `templates/settings.local.example.json`).
 - **Each worktree builds in its own `target/`** with the host's stable
   toolchain (there is no pin) and its own `ui/node_modules`; `cargo test`
