@@ -203,8 +203,9 @@ impl Default for WindowConfig {
 ///   MINIMUM (grid grows extra rows automatically so no button is ever
 ///   hidden when there are more buttons than `cols` x `rows` slots).
 /// - neither → falls back to the horizontal-only single row.
-///   All fields `serde(default)` so a config.toml written before D11 existed
-///   still loads cleanly.
+///
+/// All fields `serde(default)` so a config.toml written before D11 existed
+/// still loads cleanly.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct LayoutConfig {
