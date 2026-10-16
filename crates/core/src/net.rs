@@ -28,7 +28,10 @@ impl OscSocket {
     }
 
     pub fn local_port(&self) -> u16 {
-        self.socket.local_addr().expect("bound socket has addr").port()
+        self.socket
+            .local_addr()
+            .expect("bound socket has addr")
+            .port()
     }
 
     fn send_bytes(&self, bytes: &[u8], ip: &str, port: u16) -> SendReport {
@@ -49,8 +52,16 @@ impl OscSocket {
             }
         };
         match self.socket.send_to(bytes, SocketAddr::new(addr, port)) {
-            Ok(_) => SendReport { ip: ip.to_string(), ok: true, error: None },
-            Err(e) => SendReport { ip: ip.to_string(), ok: false, error: Some(e.to_string()) },
+            Ok(_) => SendReport {
+                ip: ip.to_string(),
+                ok: true,
+                error: None,
+            },
+            Err(e) => SendReport {
+                ip: ip.to_string(),
+                ok: false,
+                error: Some(e.to_string()),
+            },
         }
     }
 
@@ -120,7 +131,11 @@ mod tests {
     }
 
     fn target(ip: &str, active: bool) -> Target {
-        Target { name: "t".into(), ip: ip.into(), active }
+        Target {
+            name: "t".into(),
+            ip: ip.into(),
+            active,
+        }
     }
 
     #[test]
@@ -188,11 +203,15 @@ mod tests {
         // deterministic way to exercise the failure path without depending
         // on real network unreachability.
         let targets = vec![target("::1", true)];
-        let reports = osc_sock.send_trigger("/xrt/graphic", ValueType::String, "g1", &targets, 9000);
+        let reports =
+            osc_sock.send_trigger("/xrt/graphic", ValueType::String, "g1", &targets, 9000);
 
         assert_eq!(reports.len(), 1);
         assert!(!reports[0].ok);
-        assert!(reports[0].error.is_some(), "failed send should carry an error detail");
+        assert!(
+            reports[0].error.is_some(),
+            "failed send should carry an error detail"
+        );
     }
 
     #[test]
@@ -203,7 +222,8 @@ mod tests {
         // blocking DNS resolve on-air. "localhost" would resolve if we let it
         // through; the point of this test is that we DON'T.
         let targets = vec![target("localhost", true)];
-        let reports = osc_sock.send_trigger("/xrt/graphic", ValueType::String, "g1", &targets, 9000);
+        let reports =
+            osc_sock.send_trigger("/xrt/graphic", ValueType::String, "g1", &targets, 9000);
 
         assert_eq!(reports.len(), 1);
         assert!(!reports[0].ok, "a non-IP-literal target must fail");

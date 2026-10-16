@@ -7,7 +7,10 @@ use xrt_core::osc::{self, Incoming};
 pub enum Event {
     /// A trigger arrived (D14): its OSC address plus a display string of the
     /// first argument, or None when the message carried no argument.
-    Trigger { addr: String, arg: Option<String> },
+    Trigger {
+        addr: String,
+        arg: Option<String>,
+    },
     PingAnswered(SocketAddr),
 }
 

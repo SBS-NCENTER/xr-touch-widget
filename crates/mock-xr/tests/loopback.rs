@@ -25,7 +25,13 @@ fn full_loop_trigger_ping_pong_and_heartbeat() {
     }];
 
     // --- trigger path (D14: address + typed value) ---
-    widget.send_trigger("/xrt/graphic", ValueType::String, "stinger_open", &targets, ue_port);
+    widget.send_trigger(
+        "/xrt/graphic",
+        ValueType::String,
+        "stinger_open",
+        &targets,
+        ue_port,
+    );
     wait_ms(50);
     match mock.poll_once() {
         Some(Event::Trigger { addr, arg }) => {

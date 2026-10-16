@@ -1,9 +1,12 @@
-#![cfg_attr(all(not(debug_assertions), target_os = "windows"), windows_subsystem = "windows")]
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
 
 mod engine;
 
 use std::path::PathBuf;
-use std::sync::{mpsc::Sender, Mutex};
+use std::sync::{Mutex, mpsc::Sender};
 
 use tauri::{AppHandle, Emitter, LogicalSize, Manager, State, WebviewUrl, WebviewWindowBuilder};
 use xrt_core::config::{self, Config, LoadOutcome};
@@ -25,7 +28,9 @@ fn get_config(state: State<AppState>) -> Config {
 fn save_config(app: AppHandle, state: State<AppState>, config: Config) -> Result<(), String> {
     config::save(&state.config_path, &config).map_err(|e| e.to_string())?;
     *state.config.lock().unwrap() = config.clone();
-    let _ = state.engine_tx.send(engine::EngineCmd::UpdateConfig(config.clone()));
+    let _ = state
+        .engine_tx
+        .send(engine::EngineCmd::UpdateConfig(config.clone()));
     // Settings (Task 9) needs the palette to re-apply the FULL saved config
     // (buttons, appearance, layout, window) on every [적용] — Palette.svelte
     // already subscribes to this event (Task 8).
@@ -261,7 +266,7 @@ fn apply_glass(win: &tauri::WebviewWindow) {
     }
     #[cfg(target_os = "macos")]
     {
-        use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial};
+        use window_vibrancy::{NSVisualEffectMaterial, apply_vibrancy};
         if let Err(e) = apply_vibrancy(win, NSVisualEffectMaterial::HudWindow, None, Some(14.0)) {
             eprintln!("vibrancy failed (falling back to plain transparency): {e}");
         }
@@ -338,9 +343,9 @@ fn round_window_corners(win: &tauri::WebviewWindow) {
 /// through `AnyObject` either way.
 #[cfg(target_os = "macos")]
 fn round_content_view_corners(win: &tauri::WebviewWindow, radius: f64) {
+    use objc2::msg_send;
     use objc2::rc::Retained;
     use objc2::runtime::AnyObject;
-    use objc2::msg_send;
     use objc2_app_kit::NSWindow;
     use std::ptr::NonNull;
 

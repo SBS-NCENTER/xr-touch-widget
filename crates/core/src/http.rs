@@ -55,8 +55,7 @@ mod tests {
 
     #[test]
     fn err_on_500_with_status_in_reason() {
-        let url =
-            serve_once("HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\n\r\n");
+        let url = serve_once("HTTP/1.1 500 Internal Server Error\r\ncontent-length: 0\r\n\r\n");
         let err = get(&url, T).unwrap_err();
         assert!(err.contains("500"), "want status in reason, got: {err}");
     }
@@ -64,7 +63,10 @@ mod tests {
     #[test]
     fn err_on_connection_refused() {
         // Bind to grab a free port, then drop the listener so nothing answers.
-        let addr = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap();
+        let addr = TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap();
         assert!(get(&format!("http://{addr}/"), T).is_err());
     }
 

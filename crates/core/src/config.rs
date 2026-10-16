@@ -125,7 +125,10 @@ impl From<ButtonDefCompat> for ButtonDef {
         } else {
             c.actions
         };
-        ButtonDef { label: c.label, actions }
+        ButtonDef {
+            label: c.label,
+            actions,
+        }
     }
 }
 
@@ -200,8 +203,8 @@ impl Default for WindowConfig {
 ///   MINIMUM (grid grows extra rows automatically so no button is ever
 ///   hidden when there are more buttons than `cols` x `rows` slots).
 /// - neither → falls back to the horizontal-only single row.
-/// All fields `serde(default)` so a config.toml written before D11 existed
-/// still loads cleanly.
+///   All fields `serde(default)` so a config.toml written before D11 existed
+///   still loads cleanly.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct LayoutConfig {
@@ -465,10 +468,7 @@ mod tests {
             });
             let text = toml::to_string_pretty(&c).unwrap();
             let back: Config = toml::from_str(&text).unwrap();
-            assert_eq!(
-                back.buttons[0].actions[0],
-                c.buttons[0].actions[0]
-            );
+            assert_eq!(back.buttons[0].actions[0], c.buttons[0].actions[0]);
         }
     }
 
@@ -615,12 +615,14 @@ mod tests {
     fn layout_and_highlight_last_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
-        let mut c = Config::default();
-        c.layout = LayoutConfig {
-            horizontal: false,
-            vertical: true,
-            cols: 4,
-            rows: 5,
+        let mut c = Config {
+            layout: LayoutConfig {
+                horizontal: false,
+                vertical: true,
+                cols: 4,
+                rows: 5,
+            },
+            ..Default::default()
         };
         c.appearance.highlight_last = true;
         save(&path, &c).unwrap();

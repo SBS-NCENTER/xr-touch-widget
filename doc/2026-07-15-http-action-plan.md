@@ -8,7 +8,7 @@
 
 **Tech Stack:** Rust (edition 2024) + Tauri 2 + Svelte 5 (runes). Config = TOML via `xrt-core::config`. HTTP = `ureq` 2 (blocking, `default-features = false`).
 
-**Spec:** `docs/superpowers/specs/2026-07-15-http-action-design.md`
+**Spec:** `doc/2026-07-15-http-action-design.md`
 
 ## Global Constraints
 

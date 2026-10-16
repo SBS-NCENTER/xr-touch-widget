@@ -16,7 +16,9 @@ pub enum EngineCmd {
     /// Osc inline (UDP is effectively instant), Http on a spawned thread so
     /// a dead gateway's timeout can never stall this loop (heartbeat
     /// included). Responses are NOT awaited between actions.
-    Press { index: usize },
+    Press {
+        index: usize,
+    },
     UpdateConfig(Config),
 }
 
@@ -57,7 +59,11 @@ pub fn spawn(app: AppHandle, mut config: Config, socket: OscSocket) -> Sender<En
                     if let Some(btn) = config.buttons.get(index) {
                         for action in btn.actions.clone() {
                             match action {
-                                Action::Osc { address, value_type, value } => {
+                                Action::Osc {
+                                    address,
+                                    value_type,
+                                    value,
+                                } => {
                                     for report in socket.send_trigger(
                                         &address,
                                         value_type,
@@ -67,7 +73,8 @@ pub fn spawn(app: AppHandle, mut config: Config, socket: OscSocket) -> Sender<En
                                     ) {
                                         if !report.ok {
                                             let ip = &report.ip;
-                                            let e = report.error.as_deref().unwrap_or("unknown error");
+                                            let e =
+                                                report.error.as_deref().unwrap_or("unknown error");
                                             eprintln!("OSC send to {ip} failed: {e}");
                                             hb.mark_lost(&report.ip);
                                             // D16: a failed send now also flashes
@@ -145,8 +152,12 @@ pub fn spawn(app: AppHandle, mut config: Config, socket: OscSocket) -> Sender<En
                 // targets are never contacted, so they carry no live status and
                 // on_tick forgets any ip not in this list (an active→inactive
                 // flip drops out of tracking, so it can't report a stale state).
-                let active: Vec<Target> =
-                    config.targets.iter().filter(|t| t.active).cloned().collect();
+                let active: Vec<Target> = config
+                    .targets
+                    .iter()
+                    .filter(|t| t.active)
+                    .cloned()
+                    .collect();
                 let ips: Vec<String> = active.iter().map(|t| t.ip.clone()).collect();
                 for report in socket.send_ping(&active, config.network.ue_port) {
                     if !report.ok {

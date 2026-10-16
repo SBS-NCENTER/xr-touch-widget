@@ -1,4 +1,4 @@
-use rosc::{decoder, encoder, OscMessage, OscPacket, OscType};
+use rosc::{OscMessage, OscPacket, OscType, decoder, encoder};
 
 use crate::config::ValueType;
 
@@ -102,7 +102,10 @@ pub fn decode(buf: &[u8]) -> Incoming {
         // the first argument, if present, to a display string.
         _ => {
             let arg = msg.args.first().map(display_arg);
-            Incoming::Trigger { addr: msg.addr, arg }
+            Incoming::Trigger {
+                addr: msg.addr,
+                arg,
+            }
         }
     }
 }

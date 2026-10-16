@@ -21,7 +21,10 @@ pub struct Heartbeat {
 
 impl Heartbeat {
     pub fn new(timeout_misses: u32) -> Self {
-        Self { timeout_misses, entries: HashMap::new() }
+        Self {
+            timeout_misses,
+            entries: HashMap::new(),
+        }
     }
 
     pub fn on_tick(&mut self, target_ips: &[String]) {
@@ -29,10 +32,10 @@ impl Heartbeat {
         let mut seen = HashSet::new();
         for ip in target_ips {
             if seen.insert(ip) {
-                let entry = self
-                    .entries
-                    .entry(ip.clone())
-                    .or_insert(Entry { misses: 0, status: LinkStatus::Unknown });
+                let entry = self.entries.entry(ip.clone()).or_insert(Entry {
+                    misses: 0,
+                    status: LinkStatus::Unknown,
+                });
                 entry.misses = entry.misses.saturating_add(1);
                 if entry.misses >= self.timeout_misses {
                     entry.status = LinkStatus::Lost;
@@ -49,7 +52,10 @@ impl Heartbeat {
     }
 
     pub fn status(&self, ip: &str) -> LinkStatus {
-        self.entries.get(ip).map(|e| e.status).unwrap_or(LinkStatus::Unknown)
+        self.entries
+            .get(ip)
+            .map(|e| e.status)
+            .unwrap_or(LinkStatus::Unknown)
     }
 
     /// Immediate Lost, e.g. when a send fails at socket level (spec §8).
@@ -81,7 +87,11 @@ mod tests {
         let t = ips(&["10.0.0.1"]);
         hb.on_tick(&t); // miss 1
         hb.on_tick(&t); // miss 2
-        assert_ne!(hb.status("10.0.0.1"), LinkStatus::Lost, "not lost yet at 2 misses");
+        assert_ne!(
+            hb.status("10.0.0.1"),
+            LinkStatus::Lost,
+            "not lost yet at 2 misses"
+        );
         hb.on_tick(&t); // miss 3 -> Lost
         assert_eq!(hb.status("10.0.0.1"), LinkStatus::Lost);
     }
@@ -132,7 +142,11 @@ mod tests {
         let t = ips(&["10.0.0.1", "10.0.0.1"]); // same ip twice
         hb.on_tick(&t);
         hb.on_tick(&t);
-        assert_ne!(hb.status("10.0.0.1"), LinkStatus::Lost, "2 ticks must not reach Lost");
+        assert_ne!(
+            hb.status("10.0.0.1"),
+            LinkStatus::Lost,
+            "2 ticks must not reach Lost"
+        );
         hb.on_tick(&t);
         assert_eq!(hb.status("10.0.0.1"), LinkStatus::Lost);
     }

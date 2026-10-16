@@ -10,7 +10,7 @@
 
 **Tech Stack:** Rust (rosc, serde, toml, thiserror), Tauri v2, window-vibrancy, Svelte 5 + Vite, GitHub Actions (windows runner).
 
-**Spec:** `docs/superpowers/specs/2026-07-02-xr-touch-trigger-design.md` — 모든 요구의 원천. 충돌 시 spec 우선.
+**Spec:** `doc/2026-07-02-xr-touch-trigger-design.md` — 모든 요구의 원천. 충돌 시 spec 우선.
 
 ## Global Constraints
 
