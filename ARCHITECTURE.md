@@ -12,7 +12,7 @@ a Windows PC with a touchscreen (the target)                 the XR engine
 │ ui/  (Svelte + Vite, served inside the shell)     │
 │   widget/   Palette.svelte, Settings.svelte       │             └──────────┘
 │   shared/   GlassPanel.svelte, tokens.css         │                  ▲
-│   demo/, harness/  the demo page and the test     │                  │ on this box:
+│   demo/, harness/  the demo page and the test     │                  │ on the host:
 │             harness                               │                  │ crates/mock-xr
 │   widget.html, settings.html, demo.html,          │                  │ (loopback tests)
 │   harness.html                                    │

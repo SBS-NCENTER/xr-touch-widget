@@ -36,6 +36,12 @@ over. Beside this file a session reads:
   verified on the touchscreen PC by hand.
 - **What was done** is `main`'s history and the issues and pull requests;
   nothing else records it.
+- **Currently live here, walked through as they come up** (workspace
+  `CLAUDE.md`): Rust: ownership and borrowing, `Result` and `?`, traits and
+  generics, the module tree, and what each clippy finding guards; the web
+  client: `npm` scripts and the build, the DOM and `fetch`, the page's state;
+  bash: `set -euo pipefail`, quoting and arrays, `trap`, and what each
+  shellcheck finding guards.
 - **The API docs `cargo doc` renders** are the invariant SSOT for the
   crates: a module's `//!` states what the code holds; the UI's `tokens.css`
   and the Svelte components state the look. A document cites the symbol.
@@ -162,7 +168,7 @@ route around them.
   Windows: `.github/workflows/build.yml` builds the installer on every push
   to `main`, and `release.yml` publishes a Release on a `v*` tag, both kept
   beside the check. The installer is tried on the PC by the operator against
-  `doc/windows-checklist.md`; `mock-xr` stands in for the engine on this box.
+  `doc/windows-checklist.md`; `mock-xr` stands in for the engine on the sessions' host.
 - The Windows PC and the XR engine are reached only through the operator;
   nothing in this tree holds an address of theirs that is not the design's.
 - `.claude/`'s `skills/`, `hooks/`, `rules/` and `settings.json` are tracked,
@@ -172,7 +178,11 @@ route around them.
   between machines: every worktree's `autoMemoryDirectory` names it, so every
   session reads the one current store, and the seat alone writes it.
   `ARCHIVE.md` there holds memories kept but not indexed: read it before
-  concluding none exists. The store's rules are `roles/seat.md`'s.
+  concluding none exists. The store's rules are `roles/seat.md`'s. Beside it,
+  `~/obsidian-vault/SBS/.claude/memory/_harness/` is the shared store of the
+  generic lessons every repository's sessions read: its index, when a lesson
+  of the kind might exist; the seat writes there what would fire in any
+  repository.
 - **Every session record lives under the session root**, a report under
   `reports/<session name>/`; the root counts only while it holds
   `.harness-session-root` (chun-harness `doc/sessions.md`).

@@ -2,7 +2,6 @@
 /target
 node_modules
 ui/dist
-.superpowers/
 app/gen/
 
 # ---- AI-session state: the harness is tracked, the rest is not ----
